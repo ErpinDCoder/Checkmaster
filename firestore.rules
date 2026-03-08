@@ -2,16 +2,25 @@
 // Assumed Data Model
 // ===============================================================
 //
-// Collection: tasks
-// Document ID: auto-generated
+// Collection: events
 // Fields:
-//   - text: string (required) - The task description
-//   - completed: boolean (required) - Completion status
-//   - category: string (required) - Task category
-//   - notes: string (optional) - Detailed notes
-//   - uid: string (required) - Creator's user ID
-//   - createdAt: timestamp (required) - Creation time
-//   - updatedAt: timestamp (required) - Last update time
+//   - name: string
+//   - ownerId: string
+//   - ownerName: string
+//   - ownerEmail: string
+//   - members: map (uid -> role)
+//   - nicknames: map (uid -> string)
+//   - ownerColor: string (hex)
+//   - memberColor: string (hex)
+//
+// Collection: tasks
+// Fields:
+//   - text: string
+//   - completed: boolean
+//   - category: string
+//   - notes: string
+//   - eventId: string
+//   - uid: string
 //
 // ===============================================================
 
@@ -24,50 +33,58 @@ service cloud.firestore {
       return request.auth != null;
     }
     
-    function isOwner(userId) {
-      return isAuthenticated() && request.auth.uid == userId;
-    }
-    
-    function isDocOwner() {
-      return isAuthenticated() && request.auth.uid == resource.data.uid;
-    }
-    
-    function uidUnchanged() {
-      return !('uid' in request.resource.data) || request.resource.data.uid == request.auth.uid;
-    }
-    
-    function uidNotModified() {
-      return !('uid' in request.resource.data) || request.resource.data.uid == resource.data.uid;
+    function isEventMember(eventId) {
+      return isAuthenticated() && 
+        exists(/databases/$(database)/documents/events/$(eventId)) &&
+        request.auth.uid in get(/databases/$(database)/documents/events/$(eventId)).data.members;
     }
 
-    function isValidTask(data) {
-      return data.text is string && data.text.size() > 0 && data.text.size() < 500 &&
-             data.completed is bool &&
-             data.category is string && data.category.size() > 0 && data.category.size() < 100 &&
-             (!('notes' in data) || (data.notes is string && data.notes.size() < 2000)) &&
-             data.uid is string && data.uid == request.auth.uid;
+    function isEventOwner(eventId) {
+      return isAuthenticated() && 
+        exists(/databases/$(database)/documents/events/$(eventId)) &&
+        get(/databases/$(database)/documents/events/$(eventId)).data.members[request.auth.uid] == 'owner';
+    }
+
+    match /events/{eventId} {
+      // Allow get for any authenticated user (needed for joining)
+      // Allow list only for members
+      allow get: if isAuthenticated();
+      allow list: if isAuthenticated() && request.auth.uid in resource.data.members;
+      
+      allow create: if isAuthenticated() && 
+                    request.resource.data.ownerId == request.auth.uid &&
+                    request.resource.data.members[request.auth.uid] == 'owner';
+      allow update: if isAuthenticated() && (
+        // Owner can update everything
+        resource.data.members[request.auth.uid] == 'owner' ||
+        
+        // Member or Joiner updating their own info
+        (
+          // Must be setting themselves as member (or keeping it)
+          request.resource.data.members[request.auth.uid] == 'member' &&
+          // Cannot downgrade owner (owner has their own rule)
+          resource.data.get('members', {})[request.auth.uid] != 'owner' &&
+          // Only allowed to touch these top-level fields
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members', 'nicknames', 'updatedAt']) &&
+          // Ensure they only touch their own keys in the maps
+          (
+            !request.resource.data.diff(resource.data).affectedKeys().hasAny(['members']) ||
+            request.resource.data.members.diff(resource.data.members).affectedKeys().hasOnly([request.auth.uid])
+          ) &&
+          (
+            !request.resource.data.diff(resource.data).affectedKeys().hasAny(['nicknames']) ||
+            request.resource.data.get('nicknames', {}).diff(resource.data.get('nicknames', {})).affectedKeys().hasOnly([request.auth.uid])
+          )
+        )
+      );
+      allow delete: if isAuthenticated() && resource.data.members[request.auth.uid] == 'owner';
     }
 
     match /tasks/{taskId} {
-      // Anyone authenticated can read all tasks for real-time collaboration
-      allow read: if isAuthenticated();
-      
-      // Anyone authenticated can create a task
-      allow create: if isAuthenticated() && isValidTask(request.resource.data) && uidUnchanged();
-      
-      // Anyone authenticated can update a task (for collaboration)
-      // In a real app, we might restrict this more, but for a shared checklist, everyone can edit.
-      allow update: if isAuthenticated() && 
-                    // Basic validation
-                    request.resource.data.text is string && 
-                    request.resource.data.completed is bool &&
-                    request.resource.data.category is string &&
-                    (!('notes' in request.resource.data) || request.resource.data.notes is string) &&
-                    // Ensure uid is not changed
-                    uidNotModified();
-      
-      // Only the owner or an admin can delete
-      allow delete: if isAuthenticated() && (isDocOwner() || request.auth.token.email == "ervinchandrawan17@gmail.com");
+      allow read: if isAuthenticated() && isEventMember(resource.data.eventId);
+      allow create: if isAuthenticated() && isEventMember(request.resource.data.eventId);
+      allow update: if isAuthenticated() && isEventMember(resource.data.eventId);
+      allow delete: if isAuthenticated() && isEventMember(resource.data.eventId);
     }
 
     match /{path=**} {

@@ -4,6 +4,29 @@ export interface Task {
   completed: boolean;
   category: string;
   notes?: string;
+  noteAuthorId?: string;
+  noteAuthorName?: string;
+  noteUpdatedAt?: any;
+  dueDate?: string; // ISO string
+  uid: string;
+  eventId: string;
+  createdAt: any;
+  updatedAt: any;
+}
+
+export interface Event {
+  id: string;
+  name: string;
+  ownerId: string;
+  ownerName: string;
+  ownerEmail: string;
+  members: { [uid: string]: string }; // uid -> role
+  nicknames?: { [uid: string]: string }; // uid -> nickname
+  ownerColor?: string;
+  memberColor?: string;
+  completed?: boolean;
+  createdAt: any;
+  updatedAt: any;
 }
 
 export interface Category {

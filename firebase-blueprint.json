@@ -9,16 +9,37 @@
         "completed": { "type": "boolean" },
         "category": { "type": "string" },
         "notes": { "type": "string" },
+        "eventId": { "type": "string" },
+        "uid": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["text", "completed", "category"]
+      "required": ["text", "completed", "category", "eventId", "uid"]
+    },
+    "Event": {
+      "title": "Event",
+      "description": "An event or checklist container",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "ownerName": { "type": "string" },
+        "ownerEmail": { "type": "string" },
+        "members": { "type": "object" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "ownerId", "ownerName", "ownerEmail", "members"]
     }
   },
   "firestore": {
     "tasks": {
       "schema": "Task",
-      "description": "Collection of tasks for the event"
+      "description": "Collection of tasks for all events"
+    },
+    "events": {
+      "schema": "Event",
+      "description": "Collection of events"
     }
   }
 }
