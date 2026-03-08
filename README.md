@@ -2,9 +2,8 @@
 
 Sebuah aplikasi hasil prompting pada Google AI Studio, dikerjakan kurang dari 24 jam.
 
-## Run Locally
-
-**Prerequisites:**  Node.js
+## Bagaimana menggunakan prototypenya?
+**Disclaimer:**  Aplikasi masih dalam tahap pengembangan. Kekurangan berupa bug, error, atau malfungsi fitur mungkin terjadi.
 
 
 1. Install dependencies:
