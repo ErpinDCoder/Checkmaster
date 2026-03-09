@@ -1,12 +1,17 @@
-# Checkmaster - Check, Track, Celebrate
+<div align="center">
+<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+</div>
 
-Sebuah aplikasi hasil prompting pada Google AI Studio, dikerjakan kurang dari 24 jam.
-Buat checklist harian, rencana, hingga acara penting secara offline dan online!
-Lakukan kolaborasi bersama tim dengan login menggunakan akun google anda, dapatkan ID Acara dari pemilik!
-Dilengkapi fitur Saran AI untuk membantumu membuat list tugas secara instan.
+# Run and deploy your AI Studio app
 
-## Bagaimana menggunakan prototypenya?
-**Disclaimer:**  Aplikasi masih dalam tahap pengembangan. Kekurangan berupa bug, error, atau malfungsi fitur mungkin terjadi.
+This contains everything you need to run your app locally.
+
+View your app in AI Studio: https://ai.studio/apps/09530177-bc1e-4ca0-9b3c-660ed7a8c883
+
+## Run Locally
+
+**Prerequisites:**  Node.js
+
 
 1. Install dependencies:
    `npm install`
