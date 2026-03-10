@@ -30,6 +30,22 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["name", "ownerId", "ownerName", "ownerEmail", "members"]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "A message in the event chat",
+      "type": "object",
+      "properties": {
+        "eventId": { "type": "string" },
+        "senderId": { "type": "string" },
+        "senderName": { "type": "string" },
+        "text": { "type": "string" },
+        "fileUrl": { "type": "string" },
+        "fileName": { "type": "string" },
+        "fileType": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["eventId", "senderId", "senderName", "createdAt"]
     }
   },
   "firestore": {
@@ -40,6 +56,10 @@
     "events": {
       "schema": "Event",
       "description": "Collection of events"
+    },
+    "messages": {
+      "schema": "ChatMessage",
+      "description": "Collection of chat messages for events"
     }
   }
 }

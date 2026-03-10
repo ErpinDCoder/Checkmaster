@@ -25,6 +25,7 @@ export interface Event {
   ownerColor?: string;
   memberColor?: string;
   completed?: boolean;
+  lastReadAt?: { [uid: string]: any }; // uid -> timestamp
   createdAt: any;
   updatedAt: any;
 }
@@ -35,4 +36,16 @@ export interface Category {
   icon: string;
 }
 
-export type EventType = 'Pernikahan' | 'Perusahaan' | 'Ulang Tahun' | 'Konferensi' | 'Konser' | 'Lainnya';
+export type EventType = 'Pernikahan' | 'Perusahaan' | 'Ulang Tahun' | 'Konferensi' | 'Konser' | 'Perjalanan' | 'Hari Besar' | 'Sekolah/Kampus' | 'Lainnya';
+
+export interface ChatMessage {
+  id: string;
+  eventId: string;
+  senderId: string;
+  senderName: string;
+  text?: string;
+  fileUrl?: string;
+  fileName?: string;
+  fileType?: string;
+  createdAt: any;
+}

@@ -42,12 +42,19 @@ import {
   Briefcase,
   RefreshCw,
   Copy,
-  Check
+  Check,
+  Wifi,
+  MessageSquare,
+  Send,
+  Paperclip,
+  Camera,
+  File,
+  Image as ImageIcon
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Task, Category, EventType, Event } from './types';
+import { Task, Category, EventType, Event, ChatMessage } from './types';
 import { generateEventChecklist } from './services/geminiService';
-import { auth, db, handleFirestoreError, OperationType } from './firebase';
+import { auth, db, storage, handleFirestoreError, OperationType } from './firebase';
 import { 
   signInWithPopup, 
   GoogleAuthProvider, 
@@ -55,6 +62,11 @@ import {
   signOut,
   User
 } from 'firebase/auth';
+import { 
+  ref,
+  uploadBytesResumable,
+  getDownloadURL
+} from 'firebase/storage';
 import { 
   collection, 
   onSnapshot, 
@@ -101,6 +113,7 @@ const TRANSLATIONS = {
     orgModeDesc: 'Sinkronisasi realtime dengan tim (Online).',
     startPersonal: 'Mulai Mode Pribadi',
     startOrg: 'Masuk Mode Organisasi',
+    offlineStartText: 'buat checklist personal baru anda untuk mulai mengelola persiapan anda',
     errorTitle: 'Ups! Terjadi Kesalahan',
     errorReload: 'Muat Ulang Halaman',
     permissionError: 'Anda tidak memiliki izin untuk melakukan aksi ini. Silakan login kembali.',
@@ -138,6 +151,10 @@ const TRANSLATIONS = {
     completeEvent: 'Selesaikan Acara',
     uncompleteEvent: 'Buka Kembali Acara',
     confirmDeleteEvent: 'Apakah Anda yakin ingin menghapus acara ini? Semua tugas akan dihapus selamanya.',
+    leaveEvent: 'Keluar dari Acara',
+    confirmLeaveEvent: 'Apakah Anda yakin ingin keluar dari acara ini?',
+    yes: 'Ya',
+    no: 'Tidak',
     createPrivateChecklist: 'Buat Checklist Pribadiku',
     dueDate: 'Tenggat Waktu',
     noDueDate: 'Tanpa Tenggat',
@@ -145,6 +162,9 @@ const TRANSLATIONS = {
     at: 'pada',
     notificationsEnabled: 'Notifikasi Aktif',
     enableNotifications: 'Aktifkan Notifikasi',
+    noCategories: 'Belum ada kategori yang dibuat',
+    networkWarning: 'Pastikan data seluler atau WiFi Anda aktif agar dapat terhubung.',
+    featureUnderRepair: 'Fitur ini sedang dalam perbaikan',
   },
   en: {
     appName: 'Checkmaster',
@@ -172,6 +192,7 @@ const TRANSLATIONS = {
     orgModeDesc: 'Real-time sync with team (Online).',
     startPersonal: 'Start Personal Mode',
     startOrg: 'Sign in Organization Mode',
+    offlineStartText: 'create your new personal checklist to start managing your preparations',
     errorTitle: 'Oops! Something went wrong',
     errorReload: 'Reload Page',
     permissionError: 'You do not have permission to perform this action. Please sign in again.',
@@ -198,6 +219,8 @@ const TRANSLATIONS = {
     members: 'Team Members',
     copyId: 'Copy ID',
     idCopied: 'ID Copied!',
+    noCategories: 'No categories created yet',
+    networkWarning: 'Ensure your cellular data or WiFi is active to connect.',
     nickname: 'Nickname',
     save: 'Save',
     editNickname: 'Edit Nickname',
@@ -209,6 +232,10 @@ const TRANSLATIONS = {
     completeEvent: 'Complete Event',
     uncompleteEvent: 'Reopen Event',
     confirmDeleteEvent: 'Are you sure you want to delete this event? All tasks will be permanently removed.',
+    leaveEvent: 'Leave Event',
+    confirmLeaveEvent: 'Are you sure you want to leave this event?',
+    yes: 'Yes',
+    no: 'No',
     createPrivateChecklist: 'Create My Private Checklist',
     dueDate: 'Due Date',
     noDueDate: 'No Due Date',
@@ -216,6 +243,7 @@ const TRANSLATIONS = {
     at: 'at',
     notificationsEnabled: 'Notifications Enabled',
     enableNotifications: 'Enable Notifications',
+    featureUnderRepair: 'This feature is under repair',
   }
 };
 
@@ -278,7 +306,7 @@ class ErrorBoundary extends React.Component<any, any> {
 
 function AppLogo({ size = 40, className = "" }: { size?: number, className?: string }) {
   return (
-    <div className={`relative flex items-center justify-center ${className}`} style={{ width: size, height: size }}>
+    <div className={`relative flex items-center justify-center flex-shrink-0 aspect-square ${className}`} style={{ width: size, height: size }}>
       {/* Circular Background - Dark Slate */}
       <div className="absolute inset-0 bg-slate-900 rounded-full shadow-lg" />
       
@@ -357,7 +385,7 @@ function SplashScreen() {
       </motion.div>
       
       <div className="absolute bottom-12 text-emerald-100/60 text-xs font-medium tracking-[0.2em] uppercase">
-        Check. Track. Done.
+        Check. Track. Celebrate.
       </div>
     </motion.div>
   );
@@ -390,11 +418,13 @@ function ChecklistApp() {
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [showSplash, setShowSplash] = useState(true);
   const [eventName, setEventName] = useState(() => localStorage.getItem('event-name') || t.defaultEventName);
-  const [eventType, setEventType] = useState<EventType>(lang === 'id' ? 'Perusahaan' : 'Pernikahan');
+  const [eventType, setEventType] = useState<EventType>(lang === 'id' ? 'Perjalanan' : 'Travel');
   const [isGenerating, setIsGenerating] = useState(false);
   const [newTaskText, setNewTaskText] = useState('');
   const [activeCategory, setActiveCategory] = useState(t.catPreEvent);
   const [showAiModal, setShowAiModal] = useState(false);
+  const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
+  const [eventToLeave, setEventToLeave] = useState<string | null>(null);
   const [showCopySuccess, setShowCopySuccess] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showCreateEventModal, setShowCreateEventModal] = useState(false);
@@ -417,6 +447,42 @@ function ChecklistApp() {
     return saved ? JSON.parse(saved) : [];
   });
 
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [showChat, setShowChat] = useState(false);
+  const [chatText, setChatText] = useState('');
+  const [isUploading, setIsUploading] = useState(false);
+  const [showRepairModal, setShowRepairModal] = useState(false);
+
+  const currentEvent = useMemo(() => events.find(e => e.id === currentEventId), [events, currentEventId]);
+
+  // Chat Notifications
+  useEffect(() => {
+    if (messages.length === 0 || !user || !currentEvent) return;
+    
+    const lastMsg = messages[messages.length - 1];
+    if (lastMsg.senderId === user.uid) return;
+
+    const lastRead = currentEvent.lastReadAt?.[user.uid]?.toMillis ? currentEvent.lastReadAt[user.uid].toMillis() : 0;
+    const msgTime = lastMsg.createdAt?.toMillis ? lastMsg.createdAt.toMillis() : Date.now();
+
+    if (msgTime > lastRead && !showChat) {
+      if ('Notification' in window && Notification.permission === 'granted') {
+        new Notification(`${lastMsg.senderName}: ${lastMsg.text || (lastMsg.fileUrl ? 'Sent a file' : '')}`, {
+          body: currentEvent?.name,
+          icon: '/favicon.ico'
+        });
+      }
+    }
+  }, [messages, showChat, user, currentEventId, currentEvent]);
+
+  useEffect(() => {
+    if (showChat && currentEventId && user && appMode !== 'offline') {
+      updateDoc(doc(db, 'events', currentEventId), {
+        [`lastReadAt.${user.uid}`]: serverTimestamp()
+      }).catch(err => console.error('Error updating lastReadAt:', err));
+    }
+  }, [showChat, currentEventId, user, appMode]);
+
   useEffect(() => {
     localStorage.setItem('custom-categories', JSON.stringify(customCategories));
   }, [customCategories]);
@@ -425,6 +491,12 @@ function ChecklistApp() {
     localStorage.setItem('lang', lang);
   }, [lang]);
 
+  useEffect(() => {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  }, []);
+
   // Splash Screen Timeout
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -432,6 +504,34 @@ function ChecklistApp() {
     }, 2500);
     return () => clearTimeout(timer);
   }, []);
+
+  useEffect(() => {
+    if (!currentEventId || appMode === 'offline') {
+      setMessages([]);
+      return;
+    }
+
+    const q = query(
+      collection(db, 'messages'),
+      where('eventId', '==', currentEventId),
+      orderBy('createdAt', 'asc')
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const msgs: ChatMessage[] = [];
+      snapshot.forEach((doc) => {
+        msgs.push({ id: doc.id, ...doc.data() } as ChatMessage);
+      });
+      setMessages(msgs);
+    }, (error) => {
+      // Ignore initial permission errors if not logged in yet
+      if (user) {
+        handleFirestoreError(error, OperationType.LIST, 'messages');
+      }
+    });
+
+    return () => unsubscribe();
+  }, [currentEventId, appMode, user]);
 
   // Auth Listener
   useEffect(() => {
@@ -470,7 +570,11 @@ function ChecklistApp() {
       if (savedEvents) {
         const parsedEvents = JSON.parse(savedEvents);
         setEvents(parsedEvents);
-        if (!currentEventId && parsedEvents.length > 0) {
+        
+        const lastId = localStorage.getItem('current-event-id');
+        if (lastId && parsedEvents.some((e: any) => e.id === lastId)) {
+          setCurrentEventId(lastId);
+        } else if (!currentEventId && parsedEvents.length > 0) {
           setCurrentEventId(parsedEvents[0].id);
         }
       }
@@ -508,8 +612,11 @@ function ChecklistApp() {
       })) as Event[];
       setEvents(newEvents);
       
-      // Only auto-select if no event is currently selected
-      if (newEvents.length > 0 && !currentEventId) {
+      // Auto-select last opened event if it exists in the new list
+      const lastId = localStorage.getItem('current-event-id');
+      if (lastId && newEvents.some(e => e.id === lastId)) {
+        setCurrentEventId(lastId);
+      } else if (newEvents.length > 0 && !currentEventId) {
         setCurrentEventId(newEvents[0].id);
       } else if (newEvents.length === 0) {
         setCurrentEventId(null);
@@ -556,9 +663,19 @@ function ChecklistApp() {
 
   const categories = useMemo(() => {
     const uniqueCats = Array.from(new Set(tasks.map(t => t.category)));
+    // In offline mode, we only show categories that have tasks or are custom
+    if (appMode === 'offline') {
+      return Array.from(new Set([...uniqueCats, ...customCategories]));
+    }
     const base = getCategories(lang).map(c => c.name);
     return Array.from(new Set([...base, ...uniqueCats, ...customCategories]));
-  }, [tasks, lang, customCategories]);
+  }, [tasks, lang, customCategories, appMode]);
+
+  useEffect(() => {
+    if (categories.length > 0 && !categories.includes(activeCategory)) {
+      setActiveCategory(categories[0]);
+    }
+  }, [categories, activeCategory]);
 
   const login = async () => {
     const provider = new GoogleAuthProvider();
@@ -729,6 +846,28 @@ function ChecklistApp() {
       alert(lang === 'id' ? 'Berhasil bergabung ke acara!' : 'Successfully joined the event!');
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, 'events');
+    }
+  };
+
+  const formatDate = (date: any) => {
+    if (!date) return '';
+    // Handle Firestore Timestamp
+    if (date.toDate && typeof date.toDate === 'function') {
+      return date.toDate().toLocaleString();
+    }
+    // Handle Firestore Timestamp-like object
+    if (date && typeof date === 'object' && 'seconds' in date) {
+      return new Date(date.seconds * 1000).toLocaleString();
+    }
+    if (date instanceof Date) {
+      return date.toLocaleString();
+    }
+    try {
+      const d = new Date(date);
+      if (isNaN(d.getTime())) return '';
+      return d.toLocaleString();
+    } catch (e) {
+      return '';
     }
   };
 
@@ -949,6 +1088,33 @@ function ChecklistApp() {
     }
   };
 
+  const leaveEvent = async (eventId: string) => {
+    if (!user || appMode === 'offline') return;
+
+    try {
+      const eventRef = doc(db, 'events', eventId);
+      const eventSnap = await getDoc(eventRef);
+      if (!eventSnap.exists()) return;
+
+      const eventData = eventSnap.data() as Event;
+      const newMembers = { ...eventData.members };
+      delete newMembers[user.uid];
+
+      await updateDoc(eventRef, {
+        members: newMembers,
+        updatedAt: serverTimestamp()
+      });
+
+      if (currentEventId === eventId) {
+        setCurrentEventId(null);
+      }
+      setShowLeaveConfirm(false);
+      setEventToLeave(null);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'events');
+    }
+  };
+
   const deleteEvent = async (eventId: string) => {
     if (!user) return;
     
@@ -997,6 +1163,117 @@ function ChecklistApp() {
     }
   };
 
+  const sendChatMessage = async (text?: string, fileData?: { url: string, name: string, type: string }) => {
+    if (!user || !currentEventId || appMode === 'offline') return;
+    if (!text?.trim() && !fileData) return;
+
+    try {
+      await addDoc(collection(db, 'messages'), {
+        eventId: currentEventId,
+        senderId: user.uid,
+        senderName: user.displayName || 'User',
+        text: text || null,
+        fileUrl: fileData?.url || null,
+        fileName: fileData?.name || null,
+        fileType: fileData?.type || null,
+        createdAt: serverTimestamp()
+      });
+      setChatText('');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'messages');
+    }
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, isCamera = false) => {
+    const file = e.target.files?.[0];
+    if (!file || !user || !currentEventId) return;
+
+    if (appMode === 'offline') {
+      alert(lang === 'id' ? 'Fitur ini tidak tersedia dalam mode offline' : 'This feature is not available in offline mode');
+      e.target.value = '';
+      return;
+    }
+
+    // Limit file size to 10MB
+    if (file.size > 10 * 1024 * 1024) {
+      alert(lang === 'id' ? 'Ukuran file terlalu besar (maks 10MB)' : 'File size too large (max 10MB)');
+      e.target.value = '';
+      return;
+    }
+
+    console.log('Starting upload for:', file.name, 'size:', file.size);
+    console.log('Current user:', user?.uid);
+    console.log('Current event:', currentEventId);
+    console.log('Storage object:', !!storage);
+
+    if (!storage) {
+      alert(lang === 'id' ? 'Firebase Storage tidak terinisialisasi' : 'Firebase Storage not initialized');
+      e.target.value = '';
+      return;
+    }
+
+    setIsUploading(true);
+    
+    // Create a timeout to prevent infinite buffering
+    const timeoutId = setTimeout(() => {
+      setIsUploading(prev => {
+        if (prev) {
+          alert(lang === 'id' ? 'Unggahan terlalu lama. Silakan coba lagi.' : 'Upload took too long. Please try again.');
+          return false;
+        }
+        return prev;
+      });
+    }, 60000); // 1 minute timeout
+
+    try {
+      const storageRef = ref(storage, `events/${currentEventId}/chat/${Date.now()}_${file.name}`);
+      console.log('Storage ref created:', storageRef.fullPath);
+      
+      const uploadTask = uploadBytesResumable(storageRef, file);
+      
+      uploadTask.on('state_changed', 
+        (snapshot) => {
+          const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+          console.log('Upload is ' + progress + '% done');
+        }, 
+        (error) => {
+          console.error('Upload task error:', error);
+          clearTimeout(timeoutId);
+          setIsUploading(false);
+          alert(lang === 'id' ? `Gagal mengunggah: ${error.message}` : `Upload failed: ${error.message}`);
+        }, 
+        async () => {
+          console.log('Upload successful, getting download URL...');
+          try {
+            const url = await getDownloadURL(uploadTask.snapshot.ref);
+            console.log('Download URL obtained:', url);
+            
+            await sendChatMessage(undefined, {
+              url,
+              name: file.name,
+              type: file.type
+            });
+            console.log('Chat message sent with file');
+          } catch (err) {
+            console.error('Error after upload:', err);
+            alert(lang === 'id' ? 'Gagal memproses file setelah unggah' : 'Failed to process file after upload');
+          } finally {
+            clearTimeout(timeoutId);
+            setIsUploading(false);
+          }
+        }
+      );
+    } catch (error) {
+      console.error('Outer upload error:', error);
+      clearTimeout(timeoutId);
+      setIsUploading(false);
+      alert(lang === 'id' ? 'Gagal menginisialisasi unggahan' : 'Failed to initialize upload');
+    } finally {
+      // Clear the input so the same file can be selected again
+      e.target.value = '';
+    }
+  };
+
   const [notifiedTasks, setNotifiedTasks] = useState<Set<string>>(new Set());
 
   useEffect(() => {
@@ -1022,8 +1299,6 @@ function ChecklistApp() {
     return () => clearInterval(interval);
   }, [tasks, notifiedTasks, t.appName, t.dueDate]);
 
-  const currentEvent = useMemo(() => events.find(e => e.id === currentEventId), [events, currentEventId]);
-
   const progress = tasks.length > 0 
     ? Math.round((tasks.filter(t => t.completed).length / tasks.length) * 100) 
     : 0;
@@ -1032,6 +1307,38 @@ function ChecklistApp() {
     <>
       <AnimatePresence>
         {showSplash && <SplashScreen key="splash" />}
+      </AnimatePresence>
+
+      {/* Repair Modal */}
+      <AnimatePresence>
+        {showRepairModal && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-6 bg-slate-900/40 backdrop-blur-sm">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white p-8 rounded-3xl shadow-2xl max-w-sm w-full text-center"
+            >
+              <div className="w-16 h-16 bg-amber-100 text-amber-600 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                <Settings size={32} className="animate-spin-slow" />
+              </div>
+              <h3 className="text-xl font-bold text-slate-900 mb-2">
+                {t.featureUnderRepair}
+              </h3>
+              <p className="text-slate-500 text-sm mb-6">
+                {lang === 'id' 
+                  ? 'Kami sedang meningkatkan sistem penyimpanan. Mohon maaf atas ketidaknyamanannya.' 
+                  : 'We are currently upgrading our storage system. Sorry for the inconvenience.'}
+              </p>
+              <button 
+                onClick={() => setShowRepairModal(false)}
+                className="w-full py-3 bg-slate-900 text-white rounded-xl font-bold hover:bg-slate-800 transition-all"
+              >
+                OK
+              </button>
+            </motion.div>
+          </div>
+        )}
       </AnimatePresence>
 
       {/* Pull to Refresh Indicator removed */}
@@ -1097,6 +1404,13 @@ function ChecklistApp() {
                 </svg>
                 {t.loginBtn}
               </button>
+              
+              <div className="mt-6 bg-amber-50/50 border border-amber-100/50 p-4 rounded-2xl flex items-start gap-3">
+                <Wifi size={16} className="text-amber-600 shrink-0 mt-0.5" />
+                <p className="text-[10px] text-amber-800 leading-relaxed text-left">
+                  {t.networkWarning}
+                </p>
+              </div>
             </div>
           </motion.div>
         </div>
@@ -1105,17 +1419,17 @@ function ChecklistApp() {
           {/* Header */}
           <header className="bg-emerald-600 border-b border-emerald-700 sticky top-0 z-30 text-white shadow-lg">
             <div className="max-w-5xl mx-auto px-6 h-20 flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <AppLogo size={44} />
-                <div className="max-w-[180px] sm:max-w-none">
+              <div className="flex items-center gap-3 min-w-0">
+                <AppLogo size={44} className="flex-shrink-0" />
+                <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <h1 className="text-xl font-bold text-white truncate leading-tight">
                       {currentEvent?.name || t.appName}
                     </h1>
-                    {currentEvent && (
+                    {currentEvent && appMode !== 'offline' && (
                       <button 
                         onClick={() => copyToClipboard(currentEvent.id)}
-                        className="p-1 hover:bg-emerald-500 rounded-md transition-colors"
+                        className="p-1 hover:bg-emerald-500 rounded-md transition-colors shrink-0"
                         title={t.copyId}
                       >
                         <Copy size={14} className="text-emerald-100" />
@@ -1123,7 +1437,7 @@ function ChecklistApp() {
                     )}
                   </div>
                   <p className="text-[10px] text-emerald-100 uppercase tracking-[0.15em] font-bold opacity-80 leading-relaxed">
-                    {currentEvent ? (appMode === 'offline' ? 'Mode Offline' : `${t.ledBy} ${currentEvent.nicknames?.[currentEvent.ownerId] || currentEvent.ownerName}`) : t.tagline}
+                    {currentEvent ? (appMode === 'offline' ? 'Offline Mode' : `${t.ledBy} ${currentEvent.nicknames?.[currentEvent.ownerId] || currentEvent.ownerName}`) : t.tagline}
                   </p>
                 </div>
               </div>
@@ -1131,7 +1445,7 @@ function ChecklistApp() {
               <div className="flex items-center gap-2 sm:gap-4">
                 <button 
                   onClick={() => setShowAiModal(true)}
-                  className="flex items-center gap-2 bg-slate-900 text-emerald-400 px-3 sm:px-4 py-2 rounded-full text-xs sm:text-sm font-bold hover:bg-slate-800 transition-all shadow-md active:scale-95"
+                  className="hidden sm:flex items-center gap-2 bg-slate-900 text-emerald-400 px-3 sm:px-4 py-2 rounded-full text-xs sm:text-sm font-bold hover:bg-slate-800 transition-all shadow-md active:scale-95"
                 >
                   <Sparkles size={16} className="text-emerald-400" />
                   <span>{t.aiSuggest}</span>
@@ -1144,8 +1458,8 @@ function ChecklistApp() {
                     onClick={() => setShowProfileMenu(!showProfileMenu)}
                     className="flex items-center gap-2 hover:scale-105 transition-transform"
                   >
-                    <div className="relative">
-                      <img src={user.photoURL || ''} alt={user.displayName || ''} className="w-10 h-10 rounded-full border-2 border-emerald-300 shadow-md" />
+                    <div className="relative flex-shrink-0 aspect-square">
+                      <img src={user.photoURL || ''} alt={user.displayName || ''} className="w-10 h-10 rounded-full border-2 border-emerald-300 shadow-md object-cover aspect-square" />
                       <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-emerald-500 border-2 border-white rounded-full" />
                     </div>
                   </button>
@@ -1254,9 +1568,22 @@ function ChecklistApp() {
                                             </button>
                                           </>
                                         )}
+                                        {ev.ownerId !== user.uid && appMode !== 'offline' && (
+                                          <button 
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setEventToLeave(ev.id);
+                                              setShowLeaveConfirm(true);
+                                            }}
+                                            className={`p-1.5 rounded-lg transition-colors ${currentEventId === ev.id ? 'hover:bg-red-500 text-white' : 'hover:bg-red-50 text-red-600'}`}
+                                            title={t.leaveEvent}
+                                          >
+                                            <LogOut size={14} />
+                                          </button>
+                                        )}
                                       </div>
 
-                                      {currentEventId === ev.id && (
+                                      {currentEventId === ev.id && appMode !== 'offline' && (
                                         <button 
                                           onClick={(e) => {
                                             e.stopPropagation();
@@ -1405,9 +1732,7 @@ function ChecklistApp() {
                 </div>
                 <h2 className="text-2xl font-bold text-slate-900 mb-4">{lang === 'id' ? 'Mulai Acara Pertama Anda' : 'Start Your First Event'}</h2>
                 <p className="text-slate-500 mb-10 leading-relaxed">
-                  {lang === 'id' 
-                    ? 'Buat checklist baru atau bergabung ke acara tim untuk mulai mengelola persiapan Anda.' 
-                    : 'Create a new checklist or join a team event to start managing your preparations.'}
+                  {t.offlineStartText}
                 </p>
                 <div className="flex flex-col gap-3">
                   <button
@@ -1420,16 +1745,18 @@ function ChecklistApp() {
                     <Plus size={24} />
                     {t.createEvent}
                   </button>
-                  <button
-                    onClick={() => {
-                      setIsJoining(true);
-                      setShowCreateEventModal(true);
-                    }}
-                    className="w-full bg-slate-900 text-white py-4 rounded-2xl font-bold text-lg hover:bg-slate-800 transition-all shadow-xl shadow-slate-200 flex items-center justify-center gap-3"
-                  >
-                    <Users size={24} />
-                    {t.joinEvent}
-                  </button>
+                  {appMode !== 'offline' && (
+                    <button
+                      onClick={() => {
+                        setIsJoining(true);
+                        setShowCreateEventModal(true);
+                      }}
+                      className="w-full bg-slate-900 text-white py-4 rounded-2xl font-bold text-lg hover:bg-slate-800 transition-all shadow-xl shadow-slate-200 flex items-center justify-center gap-3"
+                    >
+                      <Users size={24} />
+                      {t.joinEvent}
+                    </button>
+                  )}
                 </div>
               </motion.div>
             </main>
@@ -1455,28 +1782,41 @@ function ChecklistApp() {
           <div className="bg-white rounded-2xl p-4 shadow-sm border border-emerald-100">
             <h3 className="text-sm font-semibold text-emerald-400 uppercase tracking-widest px-2 mb-3">{t.categories}</h3>
             <div className="space-y-1">
-              {categories.map(cat => (
-                <div key={cat} className="group flex items-center gap-1">
-                  <button
-                    onClick={() => setActiveCategory(cat)}
-                    className={`flex-1 flex items-center justify-between px-3 py-2 rounded-lg text-sm transition-colors ${
-                      activeCategory === cat ? 'bg-emerald-50 text-emerald-700 font-medium' : 'text-emerald-800/60 hover:bg-emerald-50/50'
-                    }`}
-                  >
-                    <span>{cat}</span>
-                    <span className="text-xs bg-emerald-50 px-2 py-0.5 rounded-full text-emerald-500">
-                      {tasks.filter(t => t.category === cat).length}
-                    </span>
-                  </button>
+              {categories.length === 0 ? (
+                <div className="py-8 px-4 text-center">
+                  <p className="text-xs text-emerald-800/40 font-medium mb-4">{t.noCategories}</p>
                   <button 
-                    onClick={(e) => { e.stopPropagation(); setCategoryToDelete(cat); }}
-                    className="opacity-0 group-hover:opacity-100 p-2 text-emerald-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
-                    title={lang === 'id' ? 'Hapus Kategori' : 'Delete Category'}
+                    onClick={() => setShowAiModal(true)}
+                    className="flex items-center gap-2 bg-slate-900 text-emerald-400 px-4 py-2 rounded-xl text-xs font-bold hover:bg-slate-800 transition-all shadow-md mx-auto"
                   >
-                    <Trash2 size={14} />
+                    <Sparkles size={14} />
+                    <span>{t.aiSuggest}</span>
                   </button>
                 </div>
-              ))}
+              ) : (
+                categories.map(cat => (
+                  <div key={cat} className="group flex items-center gap-1">
+                    <button
+                      onClick={() => setActiveCategory(cat)}
+                      className={`flex-1 flex items-center justify-between px-3 py-2 rounded-lg text-sm transition-colors ${
+                        activeCategory === cat ? 'bg-emerald-50 text-emerald-700 font-medium' : 'text-emerald-800/60 hover:bg-emerald-50/50'
+                      }`}
+                    >
+                      <span>{cat}</span>
+                      <span className="text-xs bg-emerald-50 px-2 py-0.5 rounded-full text-emerald-500">
+                        {tasks.filter(t => t.category === cat).length}
+                      </span>
+                    </button>
+                    <button 
+                      onClick={(e) => { e.stopPropagation(); setCategoryToDelete(cat); }}
+                      className="sm:opacity-0 sm:group-hover:opacity-100 p-2 text-emerald-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
+                      title={lang === 'id' ? 'Hapus Kategori' : 'Delete Category'}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ))
+              )}
             </div>
 
             {isAddingCategory ? (
@@ -1587,9 +1927,19 @@ function ChecklistApp() {
                             <span className={`flex-1 text-sm ${task.completed ? 'text-emerald-300 line-through' : 'text-emerald-900'}`}>
                               {task.text}
                             </span>
-                            <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-all">
-                              <div className="relative group/date">
+                            <div className="flex items-center gap-2 sm:opacity-0 sm:group-hover:opacity-100 transition-all">
+                              <div className="relative group/date flex items-center">
                                 <button 
+                                  onClick={(e) => {
+                                    const input = e.currentTarget.nextElementSibling as HTMLInputElement | null;
+                                    if (input) {
+                                      if ('showPicker' in input) {
+                                        (input as any).showPicker();
+                                      } else {
+                                        (input as any).click();
+                                      }
+                                    }
+                                  }}
                                   className={`p-1.5 rounded-lg transition-colors ${task.dueDate ? 'bg-amber-100 text-amber-600' : 'text-emerald-300 hover:bg-emerald-50'}`}
                                   title={t.dueDate}
                                 >
@@ -1599,8 +1949,20 @@ function ChecklistApp() {
                                   type="datetime-local"
                                   value={task.dueDate ? task.dueDate.slice(0, 16) : ''}
                                   onChange={(e) => updateDueDate(task.id, e.target.value ? new Date(e.target.value).toISOString() : '')}
-                                  className="absolute inset-0 opacity-0 cursor-pointer"
+                                  className="absolute inset-0 opacity-0 pointer-events-none"
                                 />
+                                {task.dueDate && (
+                                  <button 
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      updateDueDate(task.id, '');
+                                    }}
+                                    className="ml-1 p-1 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                                    title={lang === 'id' ? 'Hapus Deadline' : 'Clear Deadline'}
+                                  >
+                                    <X size={14} />
+                                  </button>
+                                )}
                               </div>
                               <button 
                                 onClick={() => {
@@ -1626,7 +1988,7 @@ function ChecklistApp() {
                             <div className="flex items-center gap-1.5 px-10">
                               <Clock size={12} className={new Date(task.dueDate) < new Date() ? 'text-red-500' : 'text-amber-500'} />
                               <span className={`text-[10px] font-bold ${new Date(task.dueDate) < new Date() ? 'text-red-500' : 'text-amber-600'}`}>
-                                {new Date(task.dueDate).toLocaleString()}
+                                {formatDate(task.dueDate)}
                               </span>
                             </div>
                           )}
@@ -1668,7 +2030,7 @@ function ChecklistApp() {
                                           <UserIcon size={10} />
                                           <span>
                                             {t.addedBy} <span className="text-emerald-600 font-bold">{task.noteAuthorName}</span>
-                                            {task.noteUpdatedAt && ` ${t.at} ${new Date(task.noteUpdatedAt).toLocaleString()}`}
+                                            {task.noteUpdatedAt && ` ${t.at} ${formatDate(task.noteUpdatedAt)}`}
                                           </span>
                                         </div>
                                       )}
@@ -1692,6 +2054,42 @@ function ChecklistApp() {
       {/* FABs */}
       {currentEventId && (
         <div className="fixed bottom-8 right-8 flex flex-col gap-4 z-40">
+          {/* Chat Button (Online only) */}
+          {appMode !== 'offline' && (
+            <div className="relative group">
+              <motion.button
+                whileHover={{ scale: 1.1 }}
+                whileTap={{ scale: 0.9 }}
+                onClick={() => setShowChat(true)}
+                className="w-16 h-16 bg-emerald-500 text-white rounded-full shadow-2xl flex items-center justify-center border-4 border-white"
+              >
+                <MessageSquare size={32} />
+                {messages.filter(m => {
+                  const lastRead = currentEvent?.lastReadAt?.[user?.uid || '']?.toMillis ? currentEvent.lastReadAt[user?.uid || ''].toMillis() : 0;
+                  const msgTime = m.createdAt?.toMillis ? m.createdAt.toMillis() : Date.now();
+                  return m.senderId !== user?.uid && msgTime > lastRead;
+                }).length > 0 && (
+                  <span className="absolute -top-1 -right-1 w-6 h-6 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center border-2 border-white">
+                    {messages.filter(m => {
+                      const lastRead = currentEvent?.lastReadAt?.[user?.uid || '']?.toMillis ? currentEvent.lastReadAt[user?.uid || ''].toMillis() : 0;
+                      const msgTime = m.createdAt?.toMillis ? m.createdAt.toMillis() : Date.now();
+                      return m.senderId !== user?.uid && msgTime > lastRead;
+                    }).length > 99 ? '99+' : messages.filter(m => {
+                      const lastRead = currentEvent?.lastReadAt?.[user?.uid || '']?.toMillis ? currentEvent.lastReadAt[user?.uid || ''].toMillis() : 0;
+                      const msgTime = m.createdAt?.toMillis ? m.createdAt.toMillis() : Date.now();
+                      return m.senderId !== user?.uid && msgTime > lastRead;
+                    }).length}
+                  </span>
+                )}
+              </motion.button>
+              {/* Tooltip */}
+              <div className="absolute right-full mr-4 top-1/2 -translate-y-1/2 px-3 py-1.5 bg-slate-900 text-white text-xs font-bold rounded-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap shadow-xl">
+                {lang === 'id' ? 'Chat Acara' : 'Event Chat'}
+                <div className="absolute left-full top-1/2 -translate-y-1/2 border-8 border-transparent border-l-slate-900" />
+              </div>
+            </div>
+          )}
+
           {/* AI Suggest FAB (Mobile only) */}
           <motion.button
             whileHover={{ scale: 1.1 }}
@@ -1759,20 +2157,22 @@ function ChecklistApp() {
                   </button>
                 </div>
 
-                <div className="flex gap-4 mb-8 bg-slate-50 p-1 rounded-2xl border border-slate-100">
-                  <button 
-                    onClick={() => setIsJoining(false)}
-                    className={`flex-1 py-3 rounded-xl text-sm font-bold transition-all ${!isJoining ? 'bg-white shadow-sm text-emerald-600' : 'text-slate-400'}`}
-                  >
-                    {t.createEvent}
-                  </button>
-                  <button 
-                    onClick={() => setIsJoining(true)}
-                    className={`flex-1 py-3 rounded-xl text-sm font-bold transition-all ${isJoining ? 'bg-white shadow-sm text-emerald-600' : 'text-slate-400'}`}
-                  >
-                    {t.joinEvent}
-                  </button>
-                </div>
+                {appMode !== 'offline' && (
+                  <div className="flex gap-4 mb-8 bg-slate-50 p-1 rounded-2xl border border-slate-100">
+                    <button 
+                      onClick={() => setIsJoining(false)}
+                      className={`flex-1 py-3 rounded-xl text-sm font-bold transition-all ${!isJoining ? 'bg-white shadow-sm text-emerald-600' : 'text-slate-400'}`}
+                    >
+                      {t.createEvent}
+                    </button>
+                    <button 
+                      onClick={() => setIsJoining(true)}
+                      className={`flex-1 py-3 rounded-xl text-sm font-bold transition-all ${isJoining ? 'bg-white shadow-sm text-emerald-600' : 'text-slate-400'}`}
+                    >
+                      {t.joinEvent}
+                    </button>
+                  </div>
+                )}
 
                 <div className="space-y-6">
                   {!isJoining ? (
@@ -1901,11 +2301,14 @@ function ChecklistApp() {
                   <div>
                     <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">{t.eventType}</label>
                     <div className="grid grid-cols-3 gap-2">
-                      {(lang === 'id' ? ['Perusahaan', 'Pernikahan', 'Ulang Tahun', 'Konferensi', 'Konser', 'Lainnya'] : ['Corporate', 'Wedding', 'Birthday', 'Conference', 'Concert', 'Other']).map(type => (
+                      {(lang === 'id' ? 
+                        ['Pernikahan', 'Perusahaan', 'Ulang Tahun', 'Konferensi', 'Konser', 'Perjalanan', 'Hari Besar', 'Sekolah/Kampus', 'Lainnya'] : 
+                        ['Wedding', 'Corporate', 'Birthday', 'Conference', 'Concert', 'Travel', 'Holiday', 'School/Campus', 'Other']
+                      ).map(type => (
                         <button
                           key={type}
                           onClick={() => setEventType(type as EventType)}
-                          className={`px-3 py-2 rounded-xl text-sm border transition-all ${
+                          className={`px-2 py-2 rounded-xl text-[10px] font-bold border transition-all ${
                             eventType === type ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
                           }`}
                         >
@@ -1913,6 +2316,13 @@ function ChecklistApp() {
                         </button>
                       ))}
                     </div>
+                  </div>
+
+                  <div className="bg-amber-50 border border-amber-100 p-4 rounded-2xl flex items-start gap-3">
+                    <Wifi size={18} className="text-amber-600 shrink-0 mt-0.5" />
+                    <p className="text-xs text-amber-800 leading-relaxed">
+                      {t.networkWarning}
+                    </p>
                   </div>
 
                   <div>
@@ -1952,6 +2362,191 @@ function ChecklistApp() {
             </motion.div>
           </div>
         )}
+
+        {showLeaveConfirm && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-6 bg-slate-900/40 backdrop-blur-sm">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="bg-white w-full max-w-sm rounded-3xl shadow-2xl p-8 text-center"
+            >
+              <div className="w-16 h-16 bg-red-50 text-red-600 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                <LogOut size={32} />
+              </div>
+              <h3 className="text-xl font-bold text-slate-900 mb-2">{t.leaveEvent}</h3>
+              <p className="text-slate-500 mb-8 leading-relaxed">
+                {t.confirmLeaveEvent}
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                <button 
+                  onClick={() => {
+                    setShowLeaveConfirm(false);
+                    setEventToLeave(null);
+                  }}
+                  className="py-3 rounded-2xl font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 transition-all"
+                >
+                  {t.no}
+                </button>
+                <button 
+                  onClick={() => eventToLeave && leaveEvent(eventToLeave)}
+                  className="py-3 rounded-2xl font-bold text-white bg-red-600 hover:bg-red-700 transition-all shadow-lg shadow-red-100"
+                >
+                  {t.yes}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {/* Chat Modal */}
+        <AnimatePresence>
+          {showChat && (
+            <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center sm:p-6 bg-slate-900/40 backdrop-blur-sm">
+              <motion.div 
+                initial={{ opacity: 0, y: 100, scale: 0.95 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 100, scale: 0.95 }}
+                className="bg-slate-50 w-full max-w-lg h-[90vh] sm:h-[600px] sm:rounded-3xl shadow-2xl overflow-hidden flex flex-col"
+              >
+                {/* Chat Header */}
+                <div className="bg-white px-6 py-4 border-b border-slate-100 flex items-center justify-between shrink-0">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-emerald-100 text-emerald-600 rounded-xl flex items-center justify-center">
+                      <MessageSquare size={20} />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-slate-900">{lang === 'id' ? 'Chat Acara' : 'Event Chat'}</h3>
+                      <p className="text-[10px] text-emerald-500 font-bold uppercase tracking-widest">{currentEvent?.name}</p>
+                    </div>
+                  </div>
+                  <button onClick={() => setShowChat(false)} className="text-slate-400 hover:text-slate-600 p-2">
+                    <X size={24} />
+                  </button>
+                </div>
+
+                {/* Chat Messages */}
+                <div className="flex-1 overflow-y-auto p-6 space-y-4 scroll-smooth bg-[#e5ddd5] dark:bg-slate-900/10" style={{ backgroundImage: 'url("https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png")', backgroundBlendMode: 'overlay' }}>
+                  {messages.length === 0 ? (
+                    <div className="h-full flex flex-col items-center justify-center text-center p-8">
+                      <div className="w-16 h-16 bg-white/50 backdrop-blur-sm rounded-full flex items-center justify-center text-slate-400 mb-4">
+                        <MessageSquare size={32} />
+                      </div>
+                      <p className="text-sm text-slate-500 font-medium">{lang === 'id' ? 'Belum ada pesan. Mulai percakapan!' : 'No messages yet. Start the conversation!'}</p>
+                    </div>
+                  ) : (
+                    messages.map((msg, idx) => {
+                      const isMe = msg.senderId === user?.uid;
+                      const date = msg.createdAt?.toDate ? msg.createdAt.toDate() : new Date();
+                      const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                      const dayStr = date.toLocaleDateString(lang === 'id' ? 'id-ID' : 'en-US', { weekday: 'long', day: 'numeric', month: 'short' });
+                      
+                      const showDate = idx === 0 || (messages[idx-1].createdAt?.toDate ? messages[idx-1].createdAt.toDate().toDateString() : '') !== date.toDateString();
+
+                      return (
+                        <React.Fragment key={msg.id}>
+                          {showDate && (
+                            <div className="flex justify-center my-4">
+                              <span className="bg-white/80 backdrop-blur-sm px-3 py-1 rounded-lg text-[10px] font-bold text-slate-500 uppercase tracking-wider shadow-sm border border-white/50">
+                                {dayStr}
+                              </span>
+                            </div>
+                          )}
+                          <div className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}>
+                            <div className={`max-w-[85%] rounded-2xl px-4 py-2 shadow-sm relative ${isMe ? 'bg-emerald-500 text-white rounded-tr-none' : 'bg-white text-slate-800 rounded-tl-none'}`}>
+                              {!isMe && (
+                                <p className="text-[10px] font-black text-emerald-600 mb-1 uppercase tracking-tighter">
+                                  {msg.senderName}
+                                </p>
+                              )}
+                              
+                              {msg.fileUrl && (
+                                <div className="mb-2 rounded-xl overflow-hidden border border-black/5">
+                                  {msg.fileType?.startsWith('image/') ? (
+                                    <img src={msg.fileUrl} alt={msg.fileName} className="w-full h-auto max-h-64 object-cover" referrerPolicy="no-referrer" />
+                                  ) : (
+                                    <div className={`p-3 flex items-center gap-3 ${isMe ? 'bg-emerald-600' : 'bg-slate-50'}`}>
+                                      <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${isMe ? 'bg-emerald-700 text-white' : 'bg-emerald-100 text-emerald-600'}`}>
+                                        <FileText size={20} />
+                                      </div>
+                                      <div className="flex-1 min-w-0">
+                                        <p className="text-xs font-bold truncate">{msg.fileName}</p>
+                                        <p className="text-[10px] opacity-70 uppercase">{msg.fileType?.split('/')[1] || 'FILE'}</p>
+                                      </div>
+                                      <a href={msg.fileUrl} target="_blank" rel="noopener noreferrer" className={`p-2 rounded-lg ${isMe ? 'hover:bg-emerald-500' : 'hover:bg-slate-200'}`}>
+                                        <Paperclip size={16} />
+                                      </a>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+
+                              {msg.text && <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.text}</p>}
+                              
+                              <div className={`flex items-center justify-end gap-1 mt-1 ${isMe ? 'text-emerald-100' : 'text-slate-400'}`}>
+                                <span className="text-[9px] font-medium">{timeStr}</span>
+                                {isMe && <Check size={10} />}
+                              </div>
+                            </div>
+                          </div>
+                        </React.Fragment>
+                      );
+                    })
+                  )}
+                </div>
+
+                {/* Chat Input */}
+                <div className="bg-white p-4 border-t border-slate-100 shrink-0">
+                  <div className="flex items-end gap-2">
+                    <div className="flex gap-1 mb-1">
+                      <button 
+                        onClick={() => setShowRepairModal(true)}
+                        className="p-2 text-slate-400 hover:text-emerald-500 transition-colors"
+                      >
+                        <Paperclip size={20} />
+                      </button>
+                      <button 
+                        onClick={() => setShowRepairModal(true)}
+                        className="p-2 text-slate-400 hover:text-emerald-500 transition-colors"
+                      >
+                        <Camera size={20} />
+                      </button>
+                    </div>
+                    
+                    <div className="flex-1 bg-slate-50 rounded-2xl border border-slate-200 px-4 py-2 flex items-end">
+                      <textarea 
+                        value={chatText}
+                        onChange={(e) => setChatText(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && !e.shiftKey) {
+                            e.preventDefault();
+                            sendChatMessage(chatText);
+                          }
+                        }}
+                        placeholder={lang === 'id' ? 'Ketik pesan...' : 'Type a message...'}
+                        className="w-full bg-transparent border-none focus:outline-none text-sm py-1 max-h-32 resize-none"
+                        rows={1}
+                        style={{ height: 'auto' }}
+                        onInput={(e) => {
+                          const target = e.target as HTMLTextAreaElement;
+                          target.style.height = 'auto';
+                          target.style.height = target.scrollHeight + 'px';
+                        }}
+                      />
+                    </div>
+
+                    <button 
+                      onClick={() => sendChatMessage(chatText)}
+                      disabled={(!chatText.trim() && !isUploading) || isUploading}
+                      className="p-3 bg-emerald-500 text-white rounded-xl hover:bg-emerald-600 transition-all shadow-lg shadow-emerald-100 disabled:opacity-50 disabled:bg-slate-300 disabled:shadow-none"
+                    >
+                      {isUploading ? <Loader2 size={20} className="animate-spin" /> : <Send size={20} />}
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
       </AnimatePresence>
     </div>
     )}
