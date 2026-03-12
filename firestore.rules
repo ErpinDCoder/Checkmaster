@@ -36,7 +36,10 @@ service cloud.firestore {
     function isEventMember(eventId) {
       return isAuthenticated() && 
         exists(/databases/$(database)/documents/events/$(eventId)) &&
-        request.auth.uid in get(/databases/$(database)/documents/events/$(eventId)).data.members;
+        (
+          get(/databases/$(database)/documents/events/$(eventId)).data.members[request.auth.uid] == 'owner' ||
+          get(/databases/$(database)/documents/events/$(eventId)).data.members[request.auth.uid] == 'member'
+        );
     }
 
     function isEventOwner(eventId) {
@@ -49,7 +52,10 @@ service cloud.firestore {
       // Allow get for any authenticated user (needed for joining)
       // Allow list only for members
       allow get: if isAuthenticated();
-      allow list: if isAuthenticated() && request.auth.uid in resource.data.members;
+      allow list: if isAuthenticated() && (
+        resource.data.members[request.auth.uid] == 'owner' ||
+        resource.data.members[request.auth.uid] == 'member'
+      );
       
       allow create: if isAuthenticated() && 
                     request.resource.data.ownerId == request.auth.uid &&
@@ -60,8 +66,8 @@ service cloud.firestore {
         
         // Member or Joiner updating their own info
         (
-          // Must be setting themselves as member (or keeping it)
-          request.resource.data.members[request.auth.uid] == 'member' &&
+          // Must be a member (or becoming one)
+          (request.resource.data.members[request.auth.uid] == 'member' || resource.data.members[request.auth.uid] == 'member') &&
           // Cannot downgrade owner (owner has their own rule)
           resource.data.get('members', {})[request.auth.uid] != 'owner' &&
           // Only allowed to touch these top-level fields

@@ -384,7 +384,7 @@ function SplashScreen() {
         />
       </motion.div>
       
-      <div className="absolute bottom-12 text-emerald-100/60 text-xs font-medium tracking-[0.2em] uppercase">
+      <div className="absolute bottom-12 left-1/2 -translate-x-1/2 text-emerald-100/60 text-[10px] sm:text-xs font-medium tracking-[0.2em] uppercase whitespace-nowrap">
         Check. Track. Celebrate.
       </div>
     </motion.div>
@@ -429,6 +429,110 @@ function ChecklistApp() {
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showCreateEventModal, setShowCreateEventModal] = useState(false);
   const [isJoining, setIsJoining] = useState(false);
+  const [lastPlayedProgress, setLastPlayedProgress] = useState(0);
+  const [isEditingEventName, setIsEditingEventName] = useState(false);
+  const [tempEventName, setTempEventName] = useState('');
+
+  const playSound = (type: 'click' | 'chat' | 'success' | 'reverse-click' | 'loading' | 'copy' | 'create') => {
+    try {
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const now = ctx.currentTime;
+
+      if (type === 'loading') {
+        // "Cling" star sound - high pitched sparkling
+        [1500, 2000, 2500].forEach((freq, i) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(freq, now + i * 0.05);
+          gain.gain.setValueAtTime(0, now + i * 0.05);
+          gain.gain.linearRampToValueAtTime(0.05, now + i * 0.05 + 0.02);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.05 + 0.2);
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start(now + i * 0.05);
+          osc.stop(now + i * 0.05 + 0.2);
+        });
+        return;
+      }
+
+      if (type === 'copy') {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(1200, now);
+        gain.gain.setValueAtTime(0.1, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.1);
+        return;
+      }
+
+      if (type === 'create') {
+        [440, 554.37, 659.25, 880].forEach((freq, i) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(freq, now + i * 0.08);
+          gain.gain.setValueAtTime(0.1, now + i * 0.08);
+          gain.gain.exponentialRampToValueAtTime(0.01, now + i * 0.08 + 0.4);
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start(now + i * 0.08);
+          osc.stop(now + i * 0.08 + 0.4);
+        });
+        return;
+      }
+      
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      
+      if (type === 'click') {
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(800, now);
+        gain.gain.setValueAtTime(0.1, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+        osc.start(now);
+        osc.stop(now + 0.1);
+      } else if (type === 'reverse-click') {
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(400, now);
+        osc.frequency.exponentialRampToValueAtTime(200, now + 0.1);
+        gain.gain.setValueAtTime(0.1, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+        osc.start(now);
+        osc.stop(now + 0.1);
+      } else if (type === 'chat') {
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(600, now);
+        osc.frequency.exponentialRampToValueAtTime(400, now + 0.15);
+        gain.gain.setValueAtTime(0.05, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
+        osc.start(now);
+        osc.stop(now + 0.15);
+      } else if (type === 'success') {
+        [523.25, 659.25, 783.99, 1046.50].forEach((freq, i) => {
+          const o = ctx.createOscillator();
+          const g = ctx.createGain();
+          o.type = 'sine';
+          o.frequency.setValueAtTime(freq, now + i * 0.1);
+          g.gain.setValueAtTime(0.1, now + i * 0.1);
+          g.gain.exponentialRampToValueAtTime(0.01, now + i * 0.1 + 0.3);
+          o.connect(g);
+          g.connect(ctx.destination);
+          o.start(now + i * 0.1);
+          o.stop(now + i * 0.1 + 0.3);
+        });
+      }
+    } catch (e) {
+      console.warn('Audio not supported or blocked', e);
+    }
+  };
+
   const [newEventName, setNewEventName] = useState('');
   const [joinEventId, setJoinEventId] = useState('');
   const [eventDesc, setEventDesc] = useState('');
@@ -442,10 +546,28 @@ function ChecklistApp() {
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [pullDistance, setPullDistance] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [customCategories, setCustomCategories] = useState<string[]>(() => {
-    const saved = localStorage.getItem('custom-categories');
-    return saved ? JSON.parse(saved) : [];
+  const [customCategories, setCustomCategories] = useState<string[]>([]);
+  const [aiQuota, setAiQuota] = useState<number>(() => {
+    const saved = localStorage.getItem('ai-quota');
+    return saved ? parseInt(saved) : 10;
   });
+
+  useEffect(() => {
+    const key = appMode === 'offline' ? 'custom-categories-offline' : `custom-categories-online-${currentEventId || 'global'}`;
+    const saved = localStorage.getItem(key);
+    setCustomCategories(saved ? JSON.parse(saved) : []);
+  }, [appMode, currentEventId]);
+
+  useEffect(() => {
+    if (appMode) {
+      const key = appMode === 'offline' ? 'custom-categories-offline' : `custom-categories-online-${currentEventId || 'global'}`;
+      localStorage.setItem(key, JSON.stringify(customCategories));
+    }
+  }, [customCategories, appMode, currentEventId]);
+
+  useEffect(() => {
+    localStorage.setItem('ai-quota', aiQuota.toString());
+  }, [aiQuota]);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [showChat, setShowChat] = useState(false);
@@ -476,12 +598,17 @@ function ChecklistApp() {
   }, [messages, showChat, user, currentEventId, currentEvent]);
 
   useEffect(() => {
-    if (showChat && currentEventId && user && appMode !== 'offline') {
+    if (showChat && currentEventId && user && appMode !== 'offline' && currentEvent) {
       updateDoc(doc(db, 'events', currentEventId), {
         [`lastReadAt.${user.uid}`]: serverTimestamp()
-      }).catch(err => console.error('Error updating lastReadAt:', err));
+      }).catch(err => {
+        // Only log if it's not a permission error during transition
+        if (!err.message?.includes('permission')) {
+          console.error('Error updating lastReadAt:', err);
+        }
+      });
     }
-  }, [showChat, currentEventId, user, appMode]);
+  }, [showChat, currentEventId, user, appMode, currentEvent]);
 
   useEffect(() => {
     localStorage.setItem('custom-categories', JSON.stringify(customCategories));
@@ -499,6 +626,7 @@ function ChecklistApp() {
 
   // Splash Screen Timeout
   useEffect(() => {
+    playSound('loading');
     const timer = setTimeout(() => {
       setShowSplash(false);
     }, 2500);
@@ -506,7 +634,7 @@ function ChecklistApp() {
   }, []);
 
   useEffect(() => {
-    if (!currentEventId || appMode === 'offline') {
+    if (!currentEventId || appMode === 'offline' || !currentEvent) {
       setMessages([]);
       return;
     }
@@ -524,14 +652,19 @@ function ChecklistApp() {
       });
       setMessages(msgs);
     }, (error) => {
-      // Ignore initial permission errors if not logged in yet
-      if (user) {
-        handleFirestoreError(error, OperationType.LIST, 'messages');
+      // Only handle as fatal if we are sure we should have access
+      if (user && currentEvent) {
+        // If it's a permission error, maybe just log it instead of throwing
+        if (error.message?.includes('permission')) {
+          console.warn('Firestore permission denied for messages (likely transition):', error);
+        } else {
+          handleFirestoreError(error, OperationType.LIST, 'messages');
+        }
       }
     });
 
     return () => unsubscribe();
-  }, [currentEventId, appMode, user]);
+  }, [currentEventId, appMode, user, currentEvent]);
 
   // Auth Listener
   useEffect(() => {
@@ -604,7 +737,7 @@ function ChecklistApp() {
     }
 
     // Query events where user is a member
-    const q = query(collection(db, 'events'), where(`members.${user.uid}`, '!=', null));
+    const q = query(collection(db, 'events'), where(`members.${user.uid}`, 'in', ['owner', 'member']));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const newEvents = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -664,11 +797,15 @@ function ChecklistApp() {
   const categories = useMemo(() => {
     const uniqueCats = Array.from(new Set(tasks.map(t => t.category)));
     // In offline mode, we only show categories that have tasks or are custom
+    let allCats: string[] = [];
     if (appMode === 'offline') {
-      return Array.from(new Set([...uniqueCats, ...customCategories]));
+      allCats = [...uniqueCats, ...customCategories];
+    } else {
+      const base = getCategories(lang).map(c => c.name);
+      allCats = [...base, ...uniqueCats, ...customCategories];
     }
-    const base = getCategories(lang).map(c => c.name);
-    return Array.from(new Set([...base, ...uniqueCats, ...customCategories]));
+    // Final unique check and filter out empty strings
+    return Array.from(new Set(allCats.filter(c => c && c.trim() !== '')));
   }, [tasks, lang, customCategories, appMode]);
 
   useEffect(() => {
@@ -790,6 +927,7 @@ function ChecklistApp() {
       setCurrentEventId(newEvent.id);
       setShowCreateEventModal(false);
       setNewEventName('');
+      playSound('create');
       return;
     }
 
@@ -798,6 +936,7 @@ function ChecklistApp() {
       setCurrentEventId(docRef.id);
       setShowCreateEventModal(false);
       setNewEventName('');
+      playSound('create');
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'events');
     }
@@ -806,6 +945,7 @@ function ChecklistApp() {
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
     setShowCopySuccess(true);
+    playSound('copy');
     setTimeout(() => setShowCopySuccess(false), 2000);
   };
 
@@ -817,21 +957,25 @@ function ChecklistApp() {
       return;
     }
 
+    setIsJoining(true);
     try {
-      const eventRef = doc(db, 'events', id.trim());
+      const cleanId = id.trim();
+      const eventRef = doc(db, 'events', cleanId);
       const eventSnap = await getDoc(eventRef);
       
       if (!eventSnap.exists()) {
         alert(lang === 'id' ? 'Acara tidak ditemukan. Pastikan ID benar.' : 'Event not found. Please check the ID.');
+        setIsJoining(false);
         return;
       }
 
       const eventData = eventSnap.data();
       if (eventData.members && eventData.members[user.uid]) {
         alert(lang === 'id' ? 'Anda sudah bergabung dalam acara ini.' : 'You are already a member of this event.');
-        setCurrentEventId(id.trim());
+        setCurrentEventId(cleanId);
         setShowCreateEventModal(false);
         setJoinEventId('');
+        setIsJoining(false);
         return;
       }
 
@@ -840,12 +984,16 @@ function ChecklistApp() {
         [`nicknames.${user.uid}`]: user.displayName || 'User',
         updatedAt: serverTimestamp()
       });
-      setCurrentEventId(id.trim());
+
+      setCurrentEventId(cleanId);
       setShowCreateEventModal(false);
       setJoinEventId('');
+      playSound('click');
       alert(lang === 'id' ? 'Berhasil bergabung ke acara!' : 'Successfully joined the event!');
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, 'events');
+    } finally {
+      setIsJoining(false);
     }
   };
 
@@ -935,7 +1083,11 @@ function ChecklistApp() {
     }
 
     try {
-      const q = query(collection(db, 'tasks'), where('category', '==', catName));
+      const q = query(
+        collection(db, 'tasks'), 
+        where('eventId', '==', currentEventId),
+        where('category', '==', catName)
+      );
       const snapshot = await getDocs(q);
       const batch = writeBatch(db);
       snapshot.docs.forEach((doc) => {
@@ -1002,7 +1154,12 @@ function ChecklistApp() {
         }
       }
 
+      if (aiQuota <= 0) {
+        alert(lang === 'id' ? 'Kuota gratis habis. Silakan gunakan API Key Anda sendiri.' : 'Free quota exhausted. Please use your own API Key.');
+        return;
+      }
       const result = await generateEventChecklist(eventType, eventDesc || eventName, lang);
+      setAiQuota(prev => Math.max(0, prev - 1));
       
       if (appMode === 'offline') {
         const newTasks: Task[] = [];
@@ -1062,6 +1219,7 @@ function ChecklistApp() {
         nicknames: { ...(e.nicknames || {}), [user.uid]: tempNickname }
       } : e));
       setIsEditingNickname(false);
+      playSound('success');
       return;
     }
 
@@ -1070,6 +1228,32 @@ function ChecklistApp() {
         [`nicknames.${user.uid}`]: tempNickname
       });
       setIsEditingNickname(false);
+      playSound('success');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'events');
+    }
+  };
+
+  const updateEventName = async () => {
+    if (!user || !currentEventId || !tempEventName.trim()) return;
+    
+    if (appMode === 'offline') {
+      setEvents(prev => prev.map(e => e.id === currentEventId ? {
+        ...e,
+        name: tempEventName
+      } : e));
+      setIsEditingEventName(false);
+      playSound('success');
+      return;
+    }
+
+    try {
+      await updateDoc(doc(db, 'events', currentEventId), {
+        name: tempEventName,
+        updatedAt: serverTimestamp()
+      });
+      setIsEditingEventName(false);
+      playSound('success');
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, 'events');
     }
@@ -1167,6 +1351,7 @@ function ChecklistApp() {
     if (!user || !currentEventId || appMode === 'offline') return;
     if (!text?.trim() && !fileData) return;
 
+    playSound('chat');
     try {
       await addDoc(collection(db, 'messages'), {
         eventId: currentEventId,
@@ -1303,6 +1488,13 @@ function ChecklistApp() {
     ? Math.round((tasks.filter(t => t.completed).length / tasks.length) * 100) 
     : 0;
 
+  useEffect(() => {
+    if (progress === 100 && lastPlayedProgress !== 100 && tasks.length > 0) {
+      playSound('success');
+    }
+    setLastPlayedProgress(progress);
+  }, [progress, tasks.length]);
+
   return (
     <>
       <AnimatePresence>
@@ -1390,6 +1582,7 @@ function ChecklistApp() {
 
               <button 
                 onClick={() => {
+                  playSound('click');
                   if (user?.uid === 'mock-user') setUser(null);
                   setAppMode('online');
                   login();
@@ -1422,20 +1615,48 @@ function ChecklistApp() {
               <div className="flex items-center gap-3 min-w-0">
                 <AppLogo size={44} className="flex-shrink-0" />
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <h1 className="text-xl font-bold text-white truncate leading-tight">
-                      {currentEvent?.name || t.appName}
-                    </h1>
-                    {currentEvent && appMode !== 'offline' && (
-                      <button 
-                        onClick={() => copyToClipboard(currentEvent.id)}
-                        className="p-1 hover:bg-emerald-500 rounded-md transition-colors shrink-0"
-                        title={t.copyId}
-                      >
-                        <Copy size={14} className="text-emerald-100" />
+                  {isEditingEventName ? (
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={tempEventName}
+                        onChange={(e) => setTempEventName(e.target.value)}
+                        className="bg-emerald-700 text-white border-none rounded-lg px-2 py-1 text-sm focus:ring-2 focus:ring-white/30 w-full max-w-[200px]"
+                        autoFocus
+                        onKeyDown={(e) => e.key === 'Enter' && updateEventName()}
+                        onBlur={() => setIsEditingEventName(false)}
+                      />
+                      <button onClick={updateEventName} className="p-1.5 hover:bg-emerald-500 rounded-lg transition-colors">
+                        <Check size={14} />
                       </button>
-                    )}
-                  </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2 group/event">
+                      <h1 className="text-xl font-bold text-white truncate leading-tight">
+                        {currentEvent?.name || t.appName}
+                      </h1>
+                      {currentEvent?.ownerId === user?.uid && (
+                        <button 
+                          onClick={() => {
+                            setTempEventName(currentEvent?.name || '');
+                            setIsEditingEventName(true);
+                          }}
+                          className="p-1 text-white/50 hover:text-white opacity-0 group-hover/event:opacity-100 transition-opacity"
+                        >
+                          <Pencil size={12} />
+                        </button>
+                      )}
+                      {currentEvent && appMode !== 'offline' && (
+                        <button 
+                          onClick={() => copyToClipboard(currentEvent.id)}
+                          className="p-1 hover:bg-emerald-500 rounded-md transition-colors shrink-0"
+                          title={t.copyId}
+                        >
+                          <Copy size={14} className="text-emerald-100" />
+                        </button>
+                      )}
+                    </div>
+                  )}
                   <p className="text-[10px] text-emerald-100 uppercase tracking-[0.15em] font-bold opacity-80 leading-relaxed">
                     {currentEvent ? (appMode === 'offline' ? 'Offline Mode' : `${t.ledBy} ${currentEvent.nicknames?.[currentEvent.ownerId] || currentEvent.ownerName}`) : t.tagline}
                   </p>
@@ -1444,7 +1665,7 @@ function ChecklistApp() {
               
               <div className="flex items-center gap-2 sm:gap-4">
                 <button 
-                  onClick={() => setShowAiModal(true)}
+                  onClick={() => { playSound('click'); setShowAiModal(true); }}
                   className="hidden sm:flex items-center gap-2 bg-slate-900 text-emerald-400 px-3 sm:px-4 py-2 rounded-full text-xs sm:text-sm font-bold hover:bg-slate-800 transition-all shadow-md active:scale-95"
                 >
                   <Sparkles size={16} className="text-emerald-400" />
@@ -1455,7 +1676,7 @@ function ChecklistApp() {
                 
                 <div className="relative">
                   <button 
-                    onClick={() => setShowProfileMenu(!showProfileMenu)}
+                    onClick={() => { playSound('click'); setShowProfileMenu(!showProfileMenu); }}
                     className="flex items-center gap-2 hover:scale-105 transition-transform"
                   >
                     <div className="relative flex-shrink-0 aspect-square">
@@ -1467,7 +1688,7 @@ function ChecklistApp() {
                   <AnimatePresence>
                     {showProfileMenu && (
                       <>
-                        <div className="fixed inset-0 z-40" onClick={() => setShowProfileMenu(false)} />
+                        <div className="fixed inset-0 z-40" onClick={() => { playSound('reverse-click'); setShowProfileMenu(false); }} />
                         <motion.div
                           initial={{ opacity: 0, y: 10, scale: 0.95 }}
                           animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -1512,7 +1733,7 @@ function ChecklistApp() {
                                   <p className="text-xs text-slate-500 truncate">{user.email}</p>
                                 </div>
                               </div>
-                              {currentEvent && (
+                              {currentEvent && appMode !== 'offline' && (
                                 <span className={`text-[10px] font-bold px-3 py-1 rounded-full shrink-0 ${currentEvent.members[user.uid] === 'owner' ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}>
                                   {currentEvent.members[user.uid] === 'owner' ? t.owner : t.member}
                                 </span>
@@ -1539,13 +1760,41 @@ function ChecklistApp() {
                                   >
                                     <div className="flex items-center gap-3 truncate">
                                       <div className={`w-2 h-2 rounded-full ${ev.completed ? 'bg-slate-300' : (currentEventId === ev.id ? 'bg-white' : 'bg-emerald-400')}`} />
-                                      <span className={`truncate ${ev.completed ? 'line-through opacity-50' : ''}`}>{ev.name}</span>
+                                      {isEditingEventName && currentEventId === ev.id ? (
+                                        <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                                          <input
+                                            type="text"
+                                            value={tempEventName}
+                                            onChange={(e) => setTempEventName(e.target.value)}
+                                            className={`bg-white/20 text-white border-none rounded px-2 py-0.5 text-xs focus:ring-1 focus:ring-white/50 w-32`}
+                                            autoFocus
+                                            onKeyDown={(e) => e.key === 'Enter' && updateEventName()}
+                                            onBlur={() => setIsEditingEventName(false)}
+                                          />
+                                          <button onClick={updateEventName} className="p-1 hover:bg-white/20 rounded">
+                                            <Check size={12} />
+                                          </button>
+                                        </div>
+                                      ) : (
+                                        <span className={`truncate ${ev.completed ? 'line-through opacity-50' : ''}`}>{ev.name}</span>
+                                      )}
                                     </div>
                                     <div className="flex items-center gap-1">
                                       {/* Action Buttons */}
                                       <div className="flex items-center gap-1 opacity-0 group-hover/ev:opacity-100 transition-opacity">
                                         {ev.ownerId === user.uid && (
                                           <>
+                                            <button 
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                setTempEventName(ev.name);
+                                                setIsEditingEventName(true);
+                                              }}
+                                              className={`p-1.5 rounded-lg transition-colors ${currentEventId === ev.id ? 'hover:bg-emerald-500 text-white' : 'hover:bg-emerald-50 text-emerald-600'}`}
+                                              title={t.edit}
+                                            >
+                                              <Pencil size={14} />
+                                            </button>
                                             <button 
                                               onClick={(e) => {
                                                 e.stopPropagation();
@@ -1601,7 +1850,7 @@ function ChecklistApp() {
                               )}
                             </div>
 
-                            {currentEvent && (
+                            {currentEvent && appMode !== 'offline' && (
                               <>
                                 <div className="h-px bg-slate-100 my-3 mx-4" />
                                 
@@ -1685,6 +1934,7 @@ function ChecklistApp() {
                             <div className="grid grid-cols-1 gap-1">
                               <button 
                                 onClick={() => {
+                                  playSound('click');
                                   setShowCreateEventModal(true);
                                   setShowProfileMenu(false);
                                 }}
@@ -1737,6 +1987,7 @@ function ChecklistApp() {
                 <div className="flex flex-col gap-3">
                   <button
                     onClick={() => {
+                      playSound('click');
                       setIsJoining(false);
                       setShowCreateEventModal(true);
                     }}
@@ -1748,6 +1999,7 @@ function ChecklistApp() {
                   {appMode !== 'offline' && (
                     <button
                       onClick={() => {
+                        playSound('click');
                         setIsJoining(true);
                         setShowCreateEventModal(true);
                       }}
@@ -1786,7 +2038,7 @@ function ChecklistApp() {
                 <div className="py-8 px-4 text-center">
                   <p className="text-xs text-emerald-800/40 font-medium mb-4">{t.noCategories}</p>
                   <button 
-                    onClick={() => setShowAiModal(true)}
+                    onClick={() => { playSound('click'); setShowAiModal(true); }}
                     className="flex items-center gap-2 bg-slate-900 text-emerald-400 px-4 py-2 rounded-xl text-xs font-bold hover:bg-slate-800 transition-all shadow-md mx-auto"
                   >
                     <Sparkles size={14} />
@@ -1832,7 +2084,7 @@ function ChecklistApp() {
                 />
                 <div className="flex gap-2">
                   <button
-                    onClick={handleAddCategory}
+                    onClick={() => { playSound('click'); handleAddCategory(); }}
                     className="flex-1 bg-emerald-600 text-white text-xs py-2 rounded-lg font-medium hover:bg-emerald-700 transition-colors"
                   >
                     {t.addCategory}
@@ -1847,7 +2099,7 @@ function ChecklistApp() {
               </div>
             ) : (
               <button
-                onClick={() => setIsAddingCategory(true)}
+                onClick={() => { playSound('click'); setIsAddingCategory(true); }}
                 className="mt-4 w-full flex items-center gap-2 px-3 py-2 text-emerald-600/60 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg text-sm transition-all border border-dashed border-emerald-200"
               >
                 <Plus size={14} />
@@ -1878,6 +2130,7 @@ function ChecklistApp() {
                 />
                 <button 
                   type="submit"
+                  onClick={() => playSound('click')}
                   className="bg-emerald-600 text-white p-3 rounded-xl hover:bg-emerald-700 transition-colors shadow-lg shadow-emerald-100/50"
                 >
                   <Plus size={20} />
@@ -1895,7 +2148,7 @@ function ChecklistApp() {
                       <ClipboardCheck size={48} className="mx-auto mb-4 opacity-20" />
                       <p className="mb-4">{t.noTasks}</p>
                       <button 
-                        onClick={() => setShowAiModal(true)}
+                        onClick={() => { playSound('click'); setShowAiModal(true); }}
                         className="inline-flex items-center gap-2 bg-emerald-50 text-emerald-600 px-4 py-2 rounded-xl text-sm font-bold hover:bg-emerald-100 transition-all"
                       >
                         <Sparkles size={16} />
@@ -2060,7 +2313,7 @@ function ChecklistApp() {
               <motion.button
                 whileHover={{ scale: 1.1 }}
                 whileTap={{ scale: 0.9 }}
-                onClick={() => setShowChat(true)}
+                onClick={() => { playSound('click'); setShowChat(true); }}
                 className="w-16 h-16 bg-emerald-500 text-white rounded-full shadow-2xl flex items-center justify-center border-4 border-white"
               >
                 <MessageSquare size={32} />
@@ -2094,7 +2347,7 @@ function ChecklistApp() {
           <motion.button
             whileHover={{ scale: 1.1 }}
             whileTap={{ scale: 0.9 }}
-            onClick={() => setShowAiModal(true)}
+            onClick={() => { playSound('click'); setShowAiModal(true); }}
             className="sm:hidden w-16 h-16 bg-slate-900 text-emerald-400 rounded-full shadow-2xl flex items-center justify-center border-4 border-white"
           >
             <Sparkles size={32} />
@@ -2106,6 +2359,7 @@ function ChecklistApp() {
               whileHover={{ scale: 1.1 }}
               whileTap={{ scale: 0.9 }}
               onClick={() => {
+                playSound('click');
                 setIsJoining(false);
                 setShowCreateEventModal(true);
               }}
@@ -2152,7 +2406,7 @@ function ChecklistApp() {
               <div className="p-8">
                 <div className="flex items-center justify-between mb-6">
                   <h2 className="text-xl font-bold">{isJoining ? t.joinEvent : t.createEvent}</h2>
-                  <button onClick={() => setShowCreateEventModal(false)} className="text-slate-400 hover:text-slate-600">
+                  <button onClick={() => { playSound('reverse-click'); setShowCreateEventModal(false); }} className="text-slate-400 hover:text-slate-600">
                     <X size={24} />
                   </button>
                 </div>
@@ -2196,7 +2450,7 @@ function ChecklistApp() {
                       </div>
 
                       <button
-                        onClick={() => createEvent(newEventName || t.defaultEventName)}
+                        onClick={() => { playSound('click'); createEvent(newEventName || t.defaultEventName); }}
                         className="w-full bg-emerald-600 text-white py-4 rounded-2xl font-semibold hover:bg-emerald-700 transition-all shadow-lg"
                       >
                         {t.createEvent}
@@ -2216,6 +2470,7 @@ function ChecklistApp() {
                           className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
                           onKeyDown={(e) => {
                             if (e.key === 'Enter') {
+                              playSound('click');
                               joinEvent(joinEventId);
                             }
                           }}
@@ -2223,7 +2478,7 @@ function ChecklistApp() {
                       </div>
 
                       <button
-                        onClick={() => joinEvent(joinEventId)}
+                        onClick={() => { playSound('click'); joinEvent(joinEventId); }}
                         className="w-full bg-slate-900 text-white py-4 rounded-2xl font-semibold hover:bg-slate-800 transition-all shadow-lg"
                       >
                         {t.joinEvent}
@@ -2257,7 +2512,7 @@ function ChecklistApp() {
               </p>
               <div className="flex gap-3">
                 <button
-                  onClick={() => setCategoryToDelete(null)}
+                  onClick={() => { playSound('reverse-click'); setCategoryToDelete(null); }}
                   className="flex-1 px-4 py-2 rounded-xl text-sm font-bold text-emerald-600 hover:bg-emerald-50 transition-all"
                 >
                   {t.cancel}
@@ -2282,21 +2537,31 @@ function ChecklistApp() {
               initial={{ opacity: 0, scale: 0.9, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="bg-white w-full max-w-lg rounded-3xl shadow-2xl overflow-hidden"
+              className="bg-white w-full max-w-lg rounded-3xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col"
             >
-              <div className="p-8">
+              <div className="p-8 pb-4">
                 <div className="flex items-center justify-between mb-6">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-slate-900 rounded-xl flex items-center justify-center text-emerald-400">
-                      <Sparkles size={20} />
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-slate-900 rounded-xl flex items-center justify-center text-emerald-400">
+                        <Sparkles size={20} />
+                      </div>
+                      <div>
+                        <h2 className="text-xl font-bold">{t.aiGeneratorTitle}</h2>
+                        <div className="flex items-center gap-1.5 mt-0.5">
+                          <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                          <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider">
+                            {lang === 'id' ? `Sisa Kuota Gratis: ${aiQuota}` : `Free Quota Left: ${aiQuota}`}
+                          </span>
+                        </div>
+                      </div>
                     </div>
-                    <h2 className="text-xl font-bold">{t.aiGeneratorTitle}</h2>
-                  </div>
-                  <button onClick={() => setShowAiModal(false)} className="text-slate-400 hover:text-slate-600">
+                  <button onClick={() => { playSound('reverse-click'); setShowAiModal(false); }} className="text-slate-400 hover:text-slate-600">
                     <X size={24} />
                   </button>
                 </div>
+              </div>
 
+              <div className="flex-1 overflow-y-auto p-8 pt-0 space-y-6">
                 <div className="space-y-6">
                   <div>
                     <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">{t.eventType}</label>
@@ -2336,7 +2601,7 @@ function ChecklistApp() {
                   </div>
 
                   <button
-                    onClick={handleAiGenerate}
+                    onClick={() => { playSound('click'); handleAiGenerate(); }}
                     disabled={isGenerating}
                     className="w-full bg-emerald-600 text-white py-4 rounded-2xl font-semibold flex items-center justify-center gap-2 hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
@@ -2419,7 +2684,7 @@ function ChecklistApp() {
                       <p className="text-[10px] text-emerald-500 font-bold uppercase tracking-widest">{currentEvent?.name}</p>
                     </div>
                   </div>
-                  <button onClick={() => setShowChat(false)} className="text-slate-400 hover:text-slate-600 p-2">
+                  <button onClick={() => { playSound('reverse-click'); setShowChat(false); }} className="text-slate-400 hover:text-slate-600 p-2">
                     <X size={24} />
                   </button>
                 </div>
@@ -2443,7 +2708,7 @@ function ChecklistApp() {
                       const showDate = idx === 0 || (messages[idx-1].createdAt?.toDate ? messages[idx-1].createdAt.toDate().toDateString() : '') !== date.toDateString();
 
                       return (
-                        <React.Fragment key={msg.id}>
+                        <React.Fragment key={`${msg.id}-${idx}`}>
                           {showDate && (
                             <div className="flex justify-center my-4">
                               <span className="bg-white/80 backdrop-blur-sm px-3 py-1 rounded-lg text-[10px] font-bold text-slate-500 uppercase tracking-wider shadow-sm border border-white/50">
@@ -2561,124 +2826,150 @@ function DiscussionBackground() {
       
       <motion.div 
         initial={{ opacity: 0 }}
-        animate={{ opacity: 0.4 }}
-        className="absolute bottom-0 left-1/2 -translate-x-1/2 w-full max-w-6xl h-[500px] flex items-center justify-center"
+        animate={{ opacity: 0.6 }}
+        className="absolute bottom-0 left-1/2 -translate-x-1/2 w-full max-w-6xl h-[400px] sm:h-[500px] flex items-center justify-center"
       >
         {/* The Table - Central Anchor */}
-        <div className="absolute bottom-32 w-[500px] h-[140px] bg-emerald-100/80 rounded-[100%] border-b-8 border-emerald-200/50 z-10 shadow-2xl flex items-center justify-center">
+        <div className="absolute bottom-24 sm:bottom-32 w-[300px] sm:w-[500px] h-[80px] sm:h-[140px] bg-emerald-100/80 rounded-[100%] border-b-8 border-emerald-200/50 z-10 shadow-2xl flex items-center justify-center">
           {/* Papers on table */}
           <motion.div 
-            animate={{ rotate: [5, 7, 5] }}
-            transition={{ duration: 4, repeat: Infinity }}
-            className="w-20 h-24 bg-white/40 rounded-sm shadow-sm mr-16 -mt-4 rotate-[5deg]" 
+            animate={{ rotate: [5, 10, 5], y: [0, -2, 0] }}
+            transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}
+            className="w-12 h-16 sm:w-20 sm:h-24 bg-white/40 rounded-sm shadow-sm mr-10 sm:mr-16 -mt-4 rotate-[5deg]" 
           />
           <motion.div 
-            animate={{ rotate: [-10, -8, -10] }}
-            transition={{ duration: 5, repeat: Infinity }}
-            className="w-24 h-16 bg-white/30 rounded-sm shadow-sm ml-12 mt-2 -rotate-[10deg]" 
+            animate={{ rotate: [-10, -15, -10], y: [0, 2, 0] }}
+            transition={{ duration: 5, repeat: Infinity, ease: "easeInOut" }}
+            className="w-16 h-10 sm:w-24 sm:h-16 bg-white/30 rounded-sm shadow-sm ml-8 sm:ml-12 mt-2 -rotate-[10deg]" 
           />
         </div>
         
         {/* Person 1 - Left (Pointing & Explaining) */}
-        <div className="absolute bottom-36 left-[5%] z-20">
-           <svg width="140" height="200" viewBox="0 0 140 200">
-             <circle cx="70" cy="40" r="20" fill="#4ade80" />
-             <path d="M40 200C40 150 55 100 70 100C85 100 100 150 100 200H40Z" fill="#4ade80" />
+        <div className="absolute bottom-28 sm:bottom-36 left-[2%] sm:left-[5%] z-20 scale-75 sm:scale-100">
+           <svg width="220" height="200" viewBox="0 0 220 200">
+             <circle cx="70" cy="40" r="20" fill="#059669" />
+             <path d="M40 200C40 150 55 100 70 100C85 100 100 150 100 200H40Z" fill="#059669" />
              {/* Arm Pointing at Table */}
              <motion.path 
-               d="M90 120 L130 110" 
-               stroke="#4ade80" 
-               strokeWidth="12" 
+               d="M90 120 L165 105" 
+               stroke="#059669" 
+               strokeWidth="14" 
                strokeLinecap="round"
                animate={{ 
-                 rotate: [0, -15, 0],
+                 rotate: [0, -20, 0],
                  x: [0, 10, 0],
                  y: [0, -5, 0]
                }}
                transition={{ duration: 2.5, repeat: Infinity, ease: "easeInOut" }}
                style={{ transformOrigin: '90px 120px' }}
              />
-             {/* Speech Bubble */}
+             {/* Speech Bubble - Moved further right and up */}
              <motion.g
-               initial={{ opacity: 0, scale: 0 }}
-               animate={{ opacity: [0, 1, 1, 0], scale: [0.5, 1, 1, 0.5] }}
-               transition={{ duration: 5, repeat: Infinity, times: [0.1, 0.3, 0.7, 0.9] }}
+               initial={{ opacity: 0, scale: 0, y: 20 }}
+               animate={{ 
+                 opacity: [0, 1, 1, 0], 
+                 scale: [0.5, 1.1, 1, 0.5],
+                 y: [20, 0, 0, -20],
+                 x: [30, 50, 50, 30]
+               }}
+               transition={{ duration: 4, repeat: Infinity, times: [0, 0.2, 0.8, 1] }}
              >
-               <path d="M100 20 Q130 20 130 45 Q130 70 100 70 L90 85 L90 70 Q70 70 70 45 Q70 20 100 20" fill="#bbf7d0" />
-               <circle cx="90" cy="45" r="2" fill="#4ade80" />
-               <circle cx="100" cy="45" r="2" fill="#4ade80" />
-               <circle cx="110" cy="45" r="2" fill="#4ade80" />
+               <path d="M100 20 Q135 20 135 45 Q135 70 100 70 L90 85 L90 70 Q65 70 65 45 Q65 20 100 20" fill="#ecfdf5" stroke="#10b981" strokeWidth="1" />
+               <motion.path 
+                 d="M85 45 L115 45 M85 55 L105 55" 
+                 stroke="#10b981" 
+                 strokeWidth="2" 
+                 strokeLinecap="round"
+                 animate={{ opacity: [0.3, 1, 0.3] }}
+                 transition={{ duration: 1.5, repeat: Infinity }}
+               />
              </motion.g>
            </svg>
         </div>
 
         {/* Person 2 - Back Left (Listening & Nodding) */}
-        <div className="absolute bottom-48 left-[25%] z-0">
+        <div className="absolute bottom-40 sm:bottom-48 left-[20%] sm:left-[25%] z-0 scale-75 sm:scale-100">
            <motion.svg 
              width="100" height="150" viewBox="0 0 100 150"
-             animate={{ y: [0, 3, 0] }}
-             transition={{ duration: 3, repeat: Infinity }}
+             animate={{ 
+               y: [0, 5, 0],
+               rotate: [-1, 1, -1]
+             }}
+             transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
            >
-             <circle cx="50" cy="30" r="16" fill="#bbf7d0" />
-             <path d="M30 150C30 110 40 80 50 80C60 80 70 110 70 150H30Z" fill="#bbf7d0" />
+             <circle cx="50" cy="30" r="16" fill="#6ee7b7" />
+             <path d="M30 150C30 110 40 80 50 80C60 80 70 110 70 150H30Z" fill="#6ee7b7" />
            </motion.svg>
         </div>
 
         {/* Person 3 - Back Right (Taking Notes) */}
-        <div className="absolute bottom-48 right-[25%] z-0">
+        <div className="absolute bottom-40 sm:bottom-48 right-[20%] sm:right-[25%] z-0 scale-75 sm:scale-100">
            <svg width="100" height="150" viewBox="0 0 100 150">
-             <circle cx="50" cy="30" r="16" fill="#bbf7d0" />
-             <path d="M30 150C30 110 40 80 50 80C60 80 70 110 70 150H30Z" fill="#bbf7d0" />
+             <circle cx="50" cy="30" r="16" fill="#6ee7b7" />
+             <path d="M30 150C30 110 40 80 50 80C60 80 70 110 70 150H30Z" fill="#6ee7b7" />
              {/* Arm Writing */}
              <motion.path 
-               d="M40 110 L20 130" 
-               stroke="#4ade80" 
-               strokeWidth="8" 
+               d="M40 110 L20 135" 
+               stroke="#059669" 
+               strokeWidth="10" 
                strokeLinecap="round"
                animate={{ 
-                 x: [-2, 4, -2],
-                 y: [-1, 2, -1]
+                 x: [-3, 5, -3],
+                 y: [-2, 3, -2],
+                 rotate: [-5, 5, -5]
                }}
-               transition={{ duration: 0.4, repeat: Infinity }}
+               transition={{ duration: 0.3, repeat: Infinity }}
+               style={{ transformOrigin: '40px 110px' }}
              />
              {/* Small Pen */}
              <motion.line 
-               x1="20" y1="130" x2="15" y2="135" 
-               stroke="#10b981" 
-               strokeWidth="2"
-               animate={{ x: [-2, 4, -2], y: [-1, 2, -1] }}
-               transition={{ duration: 0.4, repeat: Infinity }}
+               x1="20" y1="135" x2="12" y2="142" 
+               stroke="#064e3b" 
+               strokeWidth="3"
+               animate={{ x: [-3, 5, -3], y: [-2, 3, -2] }}
+               transition={{ duration: 0.3, repeat: Infinity }}
              />
            </svg>
         </div>
 
         {/* Person 4 - Right (Pointing Back & Disagreeing/Commenting) */}
-        <div className="absolute bottom-36 right-[5%] z-20">
-           <svg width="140" height="200" viewBox="0 0 140 200">
-             <circle cx="70" cy="40" r="20" fill="#4ade80" />
-             <path d="M40 200C40 150 55 100 70 100C85 100 100 150 100 200H40Z" fill="#4ade80" />
+        <div className="absolute bottom-28 sm:bottom-36 right-[2%] sm:right-[5%] z-20 scale-75 sm:scale-100">
+           <svg width="220" height="200" viewBox="0 0 220 200">
+             <circle cx="150" cy="40" r="20" fill="#059669" />
+             <path d="M120 200C120 150 135 100 150 100C165 100 180 150 180 200H120Z" fill="#059669" />
              {/* Arm Pointing Back */}
              <motion.path 
-               d="M50 120 L10 110" 
-               stroke="#4ade80" 
-               strokeWidth="12" 
+               d="M130 120 L50 115" 
+               stroke="#059669" 
+               strokeWidth="14" 
                strokeLinecap="round"
                animate={{ 
-                 rotate: [0, 15, 0],
+                 rotate: [0, 20, 0],
                  x: [0, -10, 0],
                  y: [0, -5, 0]
                }}
-               transition={{ duration: 3, repeat: Infinity, ease: "easeInOut", delay: 1 }}
-               style={{ transformOrigin: '50px 120px' }}
+               transition={{ duration: 3.5, repeat: Infinity, ease: "easeInOut", delay: 0.5 }}
+               style={{ transformOrigin: '130px 120px' }}
              />
-             {/* Speech Bubble */}
+             {/* Speech Bubble - Moved further left */}
              <motion.g
-               initial={{ opacity: 0, scale: 0 }}
-               animate={{ opacity: [0, 1, 1, 0], scale: [0.5, 1, 1, 0.5] }}
-               transition={{ duration: 4, repeat: Infinity, times: [0.2, 0.4, 0.8, 1], delay: 2 }}
+               initial={{ opacity: 0, scale: 0, x: -20 }}
+               animate={{ 
+                 opacity: [0, 1, 1, 0], 
+                 scale: [0.5, 1, 1, 0.5],
+                 x: [-100, -80, -80, -60]
+               }}
+               transition={{ duration: 4.5, repeat: Infinity, times: [0.2, 0.4, 0.8, 1], delay: 1.5 }}
              >
-               <path d="M40 20 Q10 20 10 45 Q10 70 40 70 L50 85 L50 70 Q70 70 70 45 Q70 20 40 20" fill="#bbf7d0" />
-               <path d="M25 45 L55 45" stroke="#4ade80" strokeWidth="2" strokeLinecap="round" />
+               <path d="M40 20 Q5 20 5 45 Q5 70 40 70 L50 85 L50 70 Q75 70 75 45 Q75 20 40 20" fill="#ecfdf5" stroke="#10b981" strokeWidth="1" />
+               <motion.path 
+                 d="M20 45 L60 45" 
+                 stroke="#10b981" 
+                 strokeWidth="3" 
+                 strokeLinecap="round"
+                 animate={{ scaleX: [0.8, 1, 0.8] }}
+                 transition={{ duration: 2, repeat: Infinity }}
+               />
              </motion.g>
            </svg>
         </div>
@@ -2689,18 +2980,19 @@ function DiscussionBackground() {
         <motion.div
           key={`circle-${i}`}
           animate={{ 
-            y: [-30, 30, -30],
-            x: [-20, 20, -20],
-            opacity: [0.03, 0.08, 0.03]
+            y: [-40, 40, -40],
+            x: [-30, 30, -30],
+            opacity: [0.05, 0.1, 0.05],
+            scale: [1, 1.1, 1]
           }}
-          transition={{ duration: 6 + i, repeat: Infinity, ease: "easeInOut" }}
-          className="absolute rounded-full blur-[60px]"
+          transition={{ duration: 8 + i * 2, repeat: Infinity, ease: "easeInOut" }}
+          className="absolute rounded-full blur-[80px]"
           style={{
-            width: 150 + i * 80,
-            height: 150 + i * 80,
-            left: `${i * 25 - 15}%`,
-            top: `${i * 15}%`,
-            backgroundColor: i % 2 === 0 ? '#4ade80' : '#bbf7d0',
+            width: 200 + i * 100,
+            height: 200 + i * 100,
+            left: `${i * 25 - 20}%`,
+            top: `${i * 20 - 10}%`,
+            backgroundColor: i % 2 === 0 ? '#10b981' : '#6ee7b7',
           }}
         />
       ))}
