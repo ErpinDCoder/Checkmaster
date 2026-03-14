@@ -146,6 +146,7 @@ const TRANSLATIONS = {
     ownerColor: 'Warna Pemilik',
     memberColor: 'Warna Anggota',
     reload: 'Muat Ulang',
+    loading: 'Memuat...',
     addEventTooltip: 'Tambah acara baru',
     deleteEvent: 'Hapus Acara',
     completeEvent: 'Selesaikan Acara',
@@ -227,6 +228,7 @@ const TRANSLATIONS = {
     ownerColor: 'Owner Color',
     memberColor: 'Member Color',
     reload: 'Reload',
+    loading: 'Loading...',
     addEventTooltip: 'Add new event',
     deleteEvent: 'Delete Event',
     completeEvent: 'Complete Event',
@@ -431,12 +433,45 @@ function ChecklistApp() {
   const [isJoining, setIsJoining] = useState(false);
   const [lastPlayedProgress, setLastPlayedProgress] = useState(0);
   const [isEditingEventName, setIsEditingEventName] = useState(false);
+  const [editingEventId, setEditingEventId] = useState<string | null>(null);
   const [tempEventName, setTempEventName] = useState('');
 
-  const playSound = (type: 'click' | 'chat' | 'success' | 'reverse-click' | 'loading' | 'copy' | 'create') => {
+  const playSound = (type: 'click' | 'chat' | 'success' | 'reverse-click' | 'loading' | 'copy' | 'create' | 'vocal') => {
     try {
       const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
       const now = ctx.currentTime;
+
+      if (type === 'vocal') {
+        // "CheckMaster, Check Track, Celebrate" - Rhythmic sequence
+        const playNote = (freq: number, start: number, duration: number, vol = 0.1) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(freq, now + start);
+          gain.gain.setValueAtTime(0, now + start);
+          gain.gain.linearRampToValueAtTime(vol, now + start + 0.05);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + start + duration);
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start(now + start);
+          osc.stop(now + start + duration);
+        };
+
+        // Check-Mas-Ter
+        playNote(440, 0, 0.2);     // Check
+        playNote(554.37, 0.2, 0.2); // Mas
+        playNote(659.25, 0.4, 0.4); // Ter
+
+        // Check-Track
+        playNote(440, 0.8, 0.2);    // Check
+        playNote(659.25, 1.0, 0.4); // Track
+
+        // Cel-e-brate
+        playNote(523.25, 1.5, 0.2); // Cel
+        playNote(659.25, 1.7, 0.2); // e
+        playNote(783.99, 1.9, 0.6); // brate
+        return;
+      }
 
       if (type === 'loading') {
         // "Cling" star sound - high pitched sparkling
@@ -629,9 +664,19 @@ function ChecklistApp() {
     playSound('loading');
     const timer = setTimeout(() => {
       setShowSplash(false);
+      playSound('vocal');
     }, 2500);
     return () => clearTimeout(timer);
   }, []);
+
+  useEffect(() => {
+    if (isAuthReady && user && appMode === 'online') {
+      const lastId = localStorage.getItem('current-event-id');
+      if (lastId && !currentEventId) {
+        setCurrentEventId(lastId);
+      }
+    }
+  }, [isAuthReady, user, appMode]);
 
   useEffect(() => {
     if (!currentEventId || appMode === 'offline' || !currentEvent) {
@@ -795,7 +840,8 @@ function ChecklistApp() {
   }, [eventName]);
 
   const categories = useMemo(() => {
-    const uniqueCats = Array.from(new Set(tasks.map(t => t.category)));
+    const filteredTasks = tasks.filter(t => t.eventId === currentEventId);
+    const uniqueCats = Array.from(new Set(filteredTasks.map(t => t.category)));
     // In offline mode, we only show categories that have tasks or are custom
     let allCats: string[] = [];
     if (appMode === 'offline') {
@@ -804,9 +850,16 @@ function ChecklistApp() {
       const base = getCategories(lang).map(c => c.name);
       allCats = [...base, ...uniqueCats, ...customCategories];
     }
-    // Final unique check and filter out empty strings
-    return Array.from(new Set(allCats.filter(c => c && c.trim() !== '')));
-  }, [tasks, lang, customCategories, appMode]);
+    // Final unique check (case-insensitive) and filter out empty strings
+    const seen = new Set<string>();
+    return allCats.filter(c => {
+      if (!c || c.trim() === '') return false;
+      const lower = c.trim().toLowerCase();
+      if (seen.has(lower)) return false;
+      seen.add(lower);
+      return true;
+    });
+  }, [tasks, lang, customCategories, appMode, currentEventId]);
 
   useEffect(() => {
     if (categories.length > 0 && !categories.includes(activeCategory)) {
@@ -1166,7 +1219,7 @@ function ChecklistApp() {
         for (const group of result) {
           for (const taskText of group.tasks) {
             newTasks.push({
-              id: Math.random().toString(36).substr(2, 9),
+              id: `ai-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
               text: taskText,
               completed: false,
               category: group.category,
@@ -1235,24 +1288,27 @@ function ChecklistApp() {
   };
 
   const updateEventName = async () => {
-    if (!user || !currentEventId || !tempEventName.trim()) return;
+    const targetId = editingEventId || currentEventId;
+    if (!user || !targetId || !tempEventName.trim()) return;
     
     if (appMode === 'offline') {
-      setEvents(prev => prev.map(e => e.id === currentEventId ? {
+      setEvents(prev => prev.map(e => e.id === targetId ? {
         ...e,
         name: tempEventName
       } : e));
       setIsEditingEventName(false);
+      setEditingEventId(null);
       playSound('success');
       return;
     }
 
     try {
-      await updateDoc(doc(db, 'events', currentEventId), {
+      await updateDoc(doc(db, 'events', targetId), {
         name: tempEventName,
         updatedAt: serverTimestamp()
       });
       setIsEditingEventName(false);
+      setEditingEventId(null);
       playSound('success');
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, 'events');
@@ -1484,16 +1540,17 @@ function ChecklistApp() {
     return () => clearInterval(interval);
   }, [tasks, notifiedTasks, t.appName, t.dueDate]);
 
-  const progress = tasks.length > 0 
-    ? Math.round((tasks.filter(t => t.completed).length / tasks.length) * 100) 
+  const currentEventTasks = tasks.filter(t => t.eventId === currentEventId);
+  const progress = currentEventTasks.length > 0 
+    ? Math.round((currentEventTasks.filter(t => t.completed).length / currentEventTasks.length) * 100) 
     : 0;
 
   useEffect(() => {
-    if (progress === 100 && lastPlayedProgress !== 100 && tasks.length > 0) {
+    if (progress === 100 && lastPlayedProgress !== 100 && currentEventTasks.length > 0) {
       playSound('success');
     }
     setLastPlayedProgress(progress);
-  }, [progress, tasks.length]);
+  }, [progress, currentEventTasks.length]);
 
   return (
     <>
@@ -1633,7 +1690,7 @@ function ChecklistApp() {
                   ) : (
                     <div className="flex items-center gap-2 group/event">
                       <h1 className="text-xl font-bold text-white truncate leading-tight">
-                        {currentEvent?.name || t.appName}
+                        {currentEventId && !currentEvent ? t.loading : (currentEvent?.name || t.appName)}
                       </h1>
                       {currentEvent?.ownerId === user?.uid && (
                         <button 
@@ -1760,7 +1817,7 @@ function ChecklistApp() {
                                   >
                                     <div className="flex items-center gap-3 truncate">
                                       <div className={`w-2 h-2 rounded-full ${ev.completed ? 'bg-slate-300' : (currentEventId === ev.id ? 'bg-white' : 'bg-emerald-400')}`} />
-                                      {isEditingEventName && currentEventId === ev.id ? (
+                                      {editingEventId === ev.id ? (
                                         <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                                           <input
                                             type="text"
@@ -1769,7 +1826,10 @@ function ChecklistApp() {
                                             className={`bg-white/20 text-white border-none rounded px-2 py-0.5 text-xs focus:ring-1 focus:ring-white/50 w-32`}
                                             autoFocus
                                             onKeyDown={(e) => e.key === 'Enter' && updateEventName()}
-                                            onBlur={() => setIsEditingEventName(false)}
+                                            onBlur={() => {
+                                              setIsEditingEventName(false);
+                                              setEditingEventId(null);
+                                            }}
                                           />
                                           <button onClick={updateEventName} className="p-1 hover:bg-white/20 rounded">
                                             <Check size={12} />
@@ -1788,6 +1848,7 @@ function ChecklistApp() {
                                               onClick={(e) => {
                                                 e.stopPropagation();
                                                 setTempEventName(ev.name);
+                                                setEditingEventId(ev.id);
                                                 setIsEditingEventName(true);
                                               }}
                                               className={`p-1.5 rounded-lg transition-colors ${currentEventId === ev.id ? 'hover:bg-emerald-500 text-white' : 'hover:bg-emerald-50 text-emerald-600'}`}
@@ -1843,7 +1904,6 @@ function ChecklistApp() {
                                           <Copy size={12} className={currentEventId === ev.id ? 'text-emerald-200' : 'text-emerald-400'} />
                                         </button>
                                       )}
-                                      {ev.ownerId === user.uid && <Star size={12} className={currentEventId === ev.id ? 'text-emerald-200' : 'text-emerald-400'} />}
                                     </div>
                                   </div>
                                 ))
@@ -2020,7 +2080,9 @@ function ChecklistApp() {
             <h3 className="text-sm font-semibold text-emerald-400 uppercase tracking-widest mb-4">{t.overallProgress}</h3>
             <div className="flex items-end justify-between mb-2">
               <span className="text-4xl font-light text-emerald-900">{progress}%</span>
-              <span className="text-sm text-emerald-600 mb-1">{tasks.filter(t => t.completed).length}/{tasks.length} {t.tasks}</span>
+              <span className="text-sm text-emerald-600 mb-1">
+                {currentEventTasks.filter(t => t.completed).length}/{currentEventTasks.length} {t.tasks}
+              </span>
             </div>
             <div className="w-full h-2 bg-emerald-50 rounded-full overflow-hidden">
               <motion.div 
@@ -2056,7 +2118,7 @@ function ChecklistApp() {
                     >
                       <span>{cat}</span>
                       <span className="text-xs bg-emerald-50 px-2 py-0.5 rounded-full text-emerald-500">
-                        {tasks.filter(t => t.category === cat).length}
+                        {currentEventTasks.filter(t => t.category === cat).length}
                       </span>
                     </button>
                     <button 
@@ -2157,7 +2219,7 @@ function ChecklistApp() {
                     </motion.div>
                   ) : (
                     tasks
-                      .filter(t => t.category === activeCategory)
+                      .filter(t => t.eventId === currentEventId && t.category === activeCategory)
                       .sort((a, b) => Number(a.completed) - Number(b.completed))
                       .map(task => (
                         <motion.div
