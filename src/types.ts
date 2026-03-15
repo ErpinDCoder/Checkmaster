@@ -21,6 +21,7 @@ export interface Event {
   ownerName: string;
   ownerEmail: string;
   members: { [uid: string]: string }; // uid -> role
+  memberJoinedAt?: { [uid: string]: any }; // uid -> timestamp
   nicknames?: { [uid: string]: string }; // uid -> nickname
   ownerColor?: string;
   memberColor?: string;
@@ -47,5 +48,6 @@ export interface ChatMessage {
   fileUrl?: string;
   fileName?: string;
   fileType?: string;
+  deleted?: boolean;
   createdAt: any;
 }
