@@ -156,6 +156,7 @@ const TRANSLATIONS = {
     confirmLeaveEvent: 'Apakah Anda yakin ingin keluar dari acara ini?',
     yes: 'Ya',
     no: 'Tidak',
+    confirmDeleteChat: 'Hapus pesan ini untuk semua orang?',
     createPrivateChecklist: 'Buat Checklist Pribadiku',
     dueDate: 'Tenggat Waktu',
     noDueDate: 'Tanpa Tenggat',
@@ -166,6 +167,7 @@ const TRANSLATIONS = {
     noCategories: 'Belum ada kategori yang dibuat',
     networkWarning: 'Pastikan data seluler atau WiFi Anda aktif agar dapat terhubung.',
     featureUnderRepair: 'Fitur ini sedang dalam perbaikan',
+    quotaExceeded: 'Kuota harian Firestore telah habis. Fitur database akan kembali normal besok (Reset setiap jam 2 siang WIB).',
   },
   en: {
     appName: 'Checkmaster',
@@ -238,6 +240,7 @@ const TRANSLATIONS = {
     confirmLeaveEvent: 'Are you sure you want to leave this event?',
     yes: 'Yes',
     no: 'No',
+    confirmDeleteChat: 'Delete this message for everyone?',
     createPrivateChecklist: 'Create My Private Checklist',
     dueDate: 'Due Date',
     noDueDate: 'No Due Date',
@@ -246,6 +249,7 @@ const TRANSLATIONS = {
     notificationsEnabled: 'Notifications Enabled',
     enableNotifications: 'Enable Notifications',
     featureUnderRepair: 'This feature is under repair',
+    quotaExceeded: 'Firestore daily quota exceeded. Database features will return to normal tomorrow (Resets at midnight PT).',
   }
 };
 
@@ -285,19 +289,42 @@ class ErrorBoundary extends React.Component<any, any> {
     
     if (hasError) {
       let displayMessage = "An error occurred.";
+      let isQuotaError = false;
       try {
         const parsed = JSON.parse(errorInfo || "");
-        if (parsed.error && parsed.error.includes("insufficient permissions")) {
-          displayMessage = t.permissionError;
+        if (parsed.error) {
+          if (parsed.error.toLowerCase().includes("insufficient permissions")) {
+            displayMessage = t.permissionError;
+          } else if (parsed.error.toLowerCase().includes("quota exceeded")) {
+            displayMessage = t.quotaExceeded;
+            isQuotaError = true;
+          } else {
+            displayMessage = parsed.error;
+          }
         }
-      } catch (e) {}
+      } catch (e) {
+        if (errorInfo?.toLowerCase().includes("quota exceeded")) {
+          displayMessage = t.quotaExceeded;
+          isQuotaError = true;
+        }
+      }
 
       return (
         <div className="min-h-screen flex items-center justify-center bg-slate-50 p-6">
           <div className="bg-white p-8 rounded-3xl shadow-xl max-w-md w-full text-center">
-            <AlertCircle className="mx-auto text-red-500 mb-4" size={48} />
-            <h2 className="text-xl font-bold mb-2">{t.errorTitle}</h2>
-            <p className="text-slate-600 mb-6 text-sm">{displayMessage}</p>
+            {isQuotaError ? (
+              <Clock className="mx-auto text-amber-500 mb-4" size={48} />
+            ) : (
+              <AlertCircle className="mx-auto text-red-500 mb-4" size={48} />
+            )}
+            <h2 className="text-xl font-bold mb-2">{isQuotaError ? (lang === 'id' ? 'Batas Kuota Tercapai' : 'Quota Limit Reached') : t.errorTitle}</h2>
+            <p className="text-slate-600 mb-6 text-sm leading-relaxed">{displayMessage}</p>
+            <button 
+              onClick={() => window.location.reload()}
+              className="w-full bg-slate-900 text-white py-3 rounded-xl font-bold hover:bg-slate-800 transition-all"
+            >
+              {t.reload}
+            </button>
           </div>
         </div>
       );
@@ -320,7 +347,7 @@ function AppLogo({ size = 40, className = "" }: { size?: number, className?: str
         {/* Checklist items */}
         <div className="mt-[20%] space-y-[15%]">
           {[1, 2, 3, 4].map(i => (
-            <div key={i} className="flex items-center gap-[12%]">
+            <div key={`logo-item-${i}`} className="flex items-center gap-[12%]">
               <div className="w-[22%] aspect-square border-[1.5px] border-emerald-200 rounded-[2px] flex items-center justify-center bg-emerald-50/30">
                 {i < 4 && (
                   <div className="w-[70%] h-[70%] bg-emerald-500 rounded-[1px]" />
@@ -431,6 +458,7 @@ function ChecklistApp() {
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showCreateEventModal, setShowCreateEventModal] = useState(false);
   const [isJoining, setIsJoining] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
   const [lastPlayedProgress, setLastPlayedProgress] = useState(0);
   const [isEditingEventName, setIsEditingEventName] = useState(false);
   const [editingEventId, setEditingEventId] = useState<string | null>(null);
@@ -438,7 +466,13 @@ function ChecklistApp() {
 
   const playSound = (type: 'click' | 'chat' | 'success' | 'reverse-click' | 'loading' | 'copy' | 'create' | 'vocal') => {
     try {
-      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioContextClass) return;
+      
+      const ctx = new AudioContextClass();
+      if (ctx.state === 'suspended') {
+        ctx.resume();
+      }
       const now = ctx.currentTime;
 
       if (type === 'vocal') {
@@ -582,30 +616,62 @@ function ChecklistApp() {
   const [pullDistance, setPullDistance] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [customCategories, setCustomCategories] = useState<string[]>([]);
-  const [aiQuota, setAiQuota] = useState<number>(() => {
-    const saved = localStorage.getItem('ai-quota');
-    return saved ? parseInt(saved) : 10;
-  });
+  const [aiQuota, setAiQuota] = useState<number>(5);
+  const [aiUsageCount, setAiUsageCount] = useState<number>(0);
+  const [lastAiReset, setLastAiReset] = useState<string>('');
+  const [showChat, setShowChat] = useState(false);
+
+  const [chatToDelete, setChatToDelete] = useState<string | null>(null);
+
+  const getWIBDate = () => {
+    const now = new Date();
+    // WIB is UTC+7. Adjust UTC time to WIB.
+    const wibOffset = 7 * 60 * 60 * 1000;
+    const wibTime = new Date(now.getTime() + wibOffset);
+    return wibTime.toISOString().split('T')[0];
+  };
 
   useEffect(() => {
-    const key = appMode === 'offline' ? 'custom-categories-offline' : `custom-categories-online-${currentEventId || 'global'}`;
-    const saved = localStorage.getItem(key);
-    setCustomCategories(saved ? JSON.parse(saved) : []);
-  }, [appMode, currentEventId]);
+    if (!user || appMode === 'offline') return;
 
-  useEffect(() => {
-    if (appMode) {
-      const key = appMode === 'offline' ? 'custom-categories-offline' : `custom-categories-online-${currentEventId || 'global'}`;
-      localStorage.setItem(key, JSON.stringify(customCategories));
-    }
-  }, [customCategories, appMode, currentEventId]);
+    const unsubscribe = onSnapshot(doc(db, 'ai_usage', user.uid), (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.data();
+        const today = getWIBDate();
+        if (data.lastReset !== today) {
+          // Reset count if it's a new day in WIB
+          setAiUsageCount(0);
+          setLastAiReset(today);
+          updateDoc(snapshot.ref, { count: 0, lastReset: today });
+        } else {
+          setAiUsageCount(data.count || 0);
+          setLastAiReset(data.lastReset);
+        }
+      } else {
+        const today = getWIBDate();
+        setDoc(doc(db, 'ai_usage', user.uid), { count: 0, lastReset: today });
+        setAiUsageCount(0);
+        setLastAiReset(today);
+      }
+    });
 
-  useEffect(() => {
-    localStorage.setItem('ai-quota', aiQuota.toString());
-  }, [aiQuota]);
+    return () => unsubscribe();
+  }, [user, appMode]);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [showChat, setShowChat] = useState(false);
+  const chatContainerRef = React.useRef<HTMLDivElement>(null);
+
+  const scrollToBottom = () => {
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+    }
+  };
+
+  useEffect(() => {
+    if (showChat) {
+      setTimeout(scrollToBottom, 100);
+    }
+  }, [showChat, messages]);
   const [chatText, setChatText] = useState('');
   const [isUploading, setIsUploading] = useState(false);
   const [showRepairModal, setShowRepairModal] = useState(false);
@@ -852,13 +918,15 @@ function ChecklistApp() {
     }
     // Final unique check (case-insensitive) and filter out empty strings
     const seen = new Set<string>();
-    return allCats.filter(c => {
-      if (!c || c.trim() === '') return false;
-      const lower = c.trim().toLowerCase();
-      if (seen.has(lower)) return false;
-      seen.add(lower);
-      return true;
-    });
+    return allCats
+      .map(c => c.trim())
+      .filter(c => {
+        if (!c) return false;
+        const lower = c.toLowerCase();
+        if (seen.has(lower)) return false;
+        seen.add(lower);
+        return true;
+      });
   }, [tasks, lang, customCategories, appMode, currentEventId]);
 
   useEffect(() => {
@@ -956,42 +1024,45 @@ function ChecklistApp() {
   };
 
   const createEvent = async (name: string) => {
-    if (!user) return;
-    
-    const newEventData = {
-      name,
-      ownerId: user.uid,
-      ownerName: user.displayName || 'User',
-      ownerEmail: user.email || '',
-      members: { [user.uid]: 'owner' },
-      nicknames: { [user.uid]: user.displayName || 'User' },
-      ownerColor: '#f59e0b', // Amber 500
-      memberColor: '#10b981', // Emerald 500
-      createdAt: appMode === 'offline' ? new Date().toISOString() : serverTimestamp(),
-      updatedAt: appMode === 'offline' ? new Date().toISOString() : serverTimestamp()
-    };
-
-    if (appMode === 'offline') {
-      const newEvent: Event = {
-        id: Math.random().toString(36).substr(2, 9),
-        ...newEventData
-      } as Event;
-      setEvents(prev => [newEvent, ...prev]);
-      setCurrentEventId(newEvent.id);
-      setShowCreateEventModal(false);
-      setNewEventName('');
-      playSound('create');
-      return;
-    }
-
+    if (!user || !name.trim()) return;
+    setIsProcessing(true);
     try {
-      const docRef = await addDoc(collection(db, 'events'), newEventData);
-      setCurrentEventId(docRef.id);
-      setShowCreateEventModal(false);
-      setNewEventName('');
-      playSound('create');
+      const newEventData = {
+        name: name.trim(),
+        ownerId: user.uid,
+        ownerName: user.displayName || 'User',
+        ownerEmail: user.email || '',
+        members: { [user.uid]: 'owner' },
+        nicknames: { [user.uid]: user.displayName || 'User' },
+        memberJoinedAt: { [user.uid]: appMode === 'offline' ? new Date().toISOString() : serverTimestamp() },
+        lastReadAt: { [user.uid]: appMode === 'offline' ? new Date().toISOString() : serverTimestamp() },
+        ownerColor: '#f59e0b', // Amber 500
+        memberColor: '#10b981', // Emerald 500
+        createdAt: appMode === 'offline' ? new Date().toISOString() : serverTimestamp(),
+        updatedAt: appMode === 'offline' ? new Date().toISOString() : serverTimestamp()
+      };
+
+      if (appMode === 'offline') {
+        const newEvent: Event = {
+          id: Math.random().toString(36).substr(2, 9),
+          ...newEventData
+        } as Event;
+        setEvents(prev => [newEvent, ...prev]);
+        setCurrentEventId(newEvent.id);
+        setShowCreateEventModal(false);
+        setNewEventName('');
+        playSound('create');
+      } else {
+        const docRef = await addDoc(collection(db, 'events'), newEventData);
+        setCurrentEventId(docRef.id);
+        setShowCreateEventModal(false);
+        setNewEventName('');
+        playSound('create');
+      }
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'events');
+    } finally {
+      setIsProcessing(false);
     }
   };
 
@@ -1010,7 +1081,7 @@ function ChecklistApp() {
       return;
     }
 
-    setIsJoining(true);
+    setIsProcessing(true);
     try {
       const cleanId = id.trim();
       const eventRef = doc(db, 'events', cleanId);
@@ -1018,7 +1089,6 @@ function ChecklistApp() {
       
       if (!eventSnap.exists()) {
         alert(lang === 'id' ? 'Acara tidak ditemukan. Pastikan ID benar.' : 'Event not found. Please check the ID.');
-        setIsJoining(false);
         return;
       }
 
@@ -1028,13 +1098,14 @@ function ChecklistApp() {
         setCurrentEventId(cleanId);
         setShowCreateEventModal(false);
         setJoinEventId('');
-        setIsJoining(false);
         return;
       }
 
       await updateDoc(eventRef, {
         [`members.${user.uid}`]: 'member',
         [`nicknames.${user.uid}`]: user.displayName || 'User',
+        [`memberJoinedAt.${user.uid}`]: serverTimestamp(),
+        [`lastReadAt.${user.uid}`]: serverTimestamp(),
         updatedAt: serverTimestamp()
       });
 
@@ -1043,10 +1114,14 @@ function ChecklistApp() {
       setJoinEventId('');
       playSound('click');
       alert(lang === 'id' ? 'Berhasil bergabung ke acara!' : 'Successfully joined the event!');
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, 'events');
+    } catch (error: any) {
+      if (error.message?.toLowerCase().includes('quota exceeded')) {
+        alert(t.quotaExceeded);
+      } else {
+        handleFirestoreError(error, OperationType.UPDATE, 'events');
+      }
     } finally {
-      setIsJoining(false);
+      setIsProcessing(false);
     }
   };
 
@@ -1172,6 +1247,14 @@ function ChecklistApp() {
 
   const handleAiGenerate = async () => {
     if (!user) return;
+    
+    if (appMode !== 'offline') {
+      if (aiUsageCount >= 5) {
+        alert(lang === 'id' ? 'Kuota harian AI habis (Maks 5x/hari). Reset jam 12 malam WIB.' : 'AI daily quota reached (Max 5x/day). Resets at 12 AM WIB.');
+        return;
+      }
+    }
+
     setIsGenerating(true);
     try {
       let targetEventId = currentEventId;
@@ -1186,6 +1269,8 @@ function ChecklistApp() {
           ownerEmail: user.email || '',
           members: { [user.uid]: 'owner' },
           nicknames: { [user.uid]: user.displayName || 'User' },
+          memberJoinedAt: { [user.uid]: appMode === 'offline' ? new Date().toISOString() : serverTimestamp() },
+          lastReadAt: { [user.uid]: appMode === 'offline' ? new Date().toISOString() : serverTimestamp() },
           ownerColor: '#f59e0b',
           memberColor: '#10b981',
           createdAt: appMode === 'offline' ? new Date().toISOString() : serverTimestamp(),
@@ -1207,19 +1292,22 @@ function ChecklistApp() {
         }
       }
 
-      if (aiQuota <= 0) {
-        alert(lang === 'id' ? 'Kuota gratis habis. Silakan gunakan API Key Anda sendiri.' : 'Free quota exhausted. Please use your own API Key.');
-        return;
-      }
       const result = await generateEventChecklist(eventType, eventDesc || eventName, lang);
-      setAiQuota(prev => Math.max(0, prev - 1));
+      
+      if (appMode !== 'offline' && user) {
+        await updateDoc(doc(db, 'ai_usage', user.uid), {
+          count: aiUsageCount + 1,
+          lastReset: getWIBDate()
+        });
+      }
       
       if (appMode === 'offline') {
         const newTasks: Task[] = [];
+        let counter = 0;
         for (const group of result) {
           for (const taskText of group.tasks) {
             newTasks.push({
-              id: `ai-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+              id: `ai-${Date.now()}-${counter++}-${Math.random().toString(36).substr(2, 9)}`,
               text: taskText,
               completed: false,
               category: group.category,
@@ -1403,6 +1491,16 @@ function ChecklistApp() {
     }
   };
 
+  const deleteChatMessage = async (msgId: string) => {
+    try {
+      await deleteDoc(doc(db, 'messages', msgId));
+      playSound('reverse-click');
+      setChatToDelete(null);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, 'messages');
+    }
+  };
+
   const sendChatMessage = async (text?: string, fileData?: { url: string, name: string, type: string }) => {
     if (!user || !currentEventId || appMode === 'offline') return;
     if (!text?.trim() && !fileData) return;
@@ -1420,8 +1518,12 @@ function ChecklistApp() {
         createdAt: serverTimestamp()
       });
       setChatText('');
-    } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, 'messages');
+    } catch (error: any) {
+      if (error.message?.toLowerCase().includes('quota exceeded')) {
+        alert(t.quotaExceeded);
+      } else {
+        handleFirestoreError(error, OperationType.CREATE, 'messages');
+      }
     }
   };
 
@@ -1603,8 +1705,8 @@ function ChecklistApp() {
           <Loader2 className="animate-spin text-emerald-600" size={48} />
         </div>
       ) : (!user || !appMode || (appMode === 'online' && user.uid === 'mock-user')) ? (
-        <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6 relative overflow-hidden">
-          <DiscussionBackground />
+        <div className="min-h-screen bg-white flex items-center justify-center p-6 relative overflow-hidden">
+          <WorkshopBackground />
           
           <motion.div 
             initial={{ opacity: 0, y: 20 }}
@@ -1690,7 +1792,7 @@ function ChecklistApp() {
                   ) : (
                     <div className="flex items-center gap-2 group/event">
                       <h1 className="text-xl font-bold text-white truncate leading-tight">
-                        {currentEventId && !currentEvent ? t.loading : (currentEvent?.name || t.appName)}
+                        {currentEventId && currentEvent ? currentEvent.name : t.appName}
                       </h1>
                       {currentEvent?.ownerId === user?.uid && (
                         <button 
@@ -1750,7 +1852,7 @@ function ChecklistApp() {
                           initial={{ opacity: 0, y: 10, scale: 0.95 }}
                           animate={{ opacity: 1, y: 0, scale: 1 }}
                           exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                          className="absolute right-0 mt-3 w-80 bg-white rounded-[2rem] shadow-2xl border border-slate-100 z-50 overflow-hidden"
+                          className="absolute right-0 mt-3 w-80 bg-white rounded-[2rem] shadow-2xl border border-slate-100 z-50 overflow-hidden max-h-[85vh] overflow-y-auto"
                         >
                           <div className="p-6 bg-slate-50 border-b border-slate-100">
                             <div className="flex items-start justify-between mb-4">
@@ -1969,7 +2071,15 @@ function ChecklistApp() {
 
                                 <div className="px-2 py-2 space-y-1">
                                   <div className="px-2 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em] mb-1">{t.members}</div>
-                                  {Object.entries(currentEvent.members).map(([uid, role]) => (
+                                  {Object.entries(currentEvent.members)
+                                    .sort(([uidA, roleA], [uidB, roleB]) => {
+                                      if (roleA === 'owner') return -1;
+                                      if (roleB === 'owner') return 1;
+                                      const joinA = currentEvent.memberJoinedAt?.[uidA]?.toMillis ? currentEvent.memberJoinedAt[uidA].toMillis() : 0;
+                                      const joinB = currentEvent.memberJoinedAt?.[uidB]?.toMillis ? currentEvent.memberJoinedAt[uidB].toMillis() : 0;
+                                      return joinA - joinB || uidA.localeCompare(uidB);
+                                    })
+                                    .map(([uid, role]) => (
                                     <div key={uid} className="flex items-center justify-between px-3 py-2 rounded-xl hover:bg-slate-50 transition-colors">
                                       <div className="flex items-center gap-3 overflow-hidden">
                                         <div 
@@ -2512,9 +2622,11 @@ function ChecklistApp() {
                       </div>
 
                       <button
+                        disabled={isProcessing}
                         onClick={() => { playSound('click'); createEvent(newEventName || t.defaultEventName); }}
-                        className="w-full bg-emerald-600 text-white py-4 rounded-2xl font-semibold hover:bg-emerald-700 transition-all shadow-lg"
+                        className={`w-full bg-emerald-600 text-white py-4 rounded-2xl font-semibold hover:bg-emerald-700 transition-all shadow-lg flex items-center justify-center gap-2 ${isProcessing ? 'opacity-70 cursor-not-allowed' : ''}`}
                       >
+                        {isProcessing && <Loader2 className="animate-spin" size={20} />}
                         {t.createEvent}
                       </button>
                     </>
@@ -2531,7 +2643,7 @@ function ChecklistApp() {
                           placeholder="e.g. xYz123..."
                           className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
                           onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
+                            if (e.key === 'Enter' && !isProcessing) {
                               playSound('click');
                               joinEvent(joinEventId);
                             }
@@ -2540,9 +2652,11 @@ function ChecklistApp() {
                       </div>
 
                       <button
+                        disabled={isProcessing}
                         onClick={() => { playSound('click'); joinEvent(joinEventId); }}
-                        className="w-full bg-slate-900 text-white py-4 rounded-2xl font-semibold hover:bg-slate-800 transition-all shadow-lg"
+                        className={`w-full bg-slate-900 text-white py-4 rounded-2xl font-semibold hover:bg-slate-800 transition-all shadow-lg flex items-center justify-center gap-2 ${isProcessing ? 'opacity-70 cursor-not-allowed' : ''}`}
                       >
+                        {isProcessing && <Loader2 className="animate-spin" size={20} />}
                         {t.joinEvent}
                       </button>
                     </>
@@ -2752,7 +2866,11 @@ function ChecklistApp() {
                 </div>
 
                 {/* Chat Messages */}
-                <div className="flex-1 overflow-y-auto p-6 space-y-4 scroll-smooth bg-[#e5ddd5] dark:bg-slate-900/10" style={{ backgroundImage: 'url("https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png")', backgroundBlendMode: 'overlay' }}>
+                <div 
+                  ref={chatContainerRef}
+                  className="flex-1 overflow-y-auto p-6 space-y-4 scroll-smooth bg-[#e5ddd5] dark:bg-slate-900/10" 
+                  style={{ backgroundImage: 'url("https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png")', backgroundBlendMode: 'overlay' }}
+                >
                   {messages.length === 0 ? (
                     <div className="h-full flex flex-col items-center justify-center text-center p-8">
                       <div className="w-16 h-16 bg-white/50 backdrop-blur-sm rounded-full flex items-center justify-center text-slate-400 mb-4">
@@ -2770,7 +2888,7 @@ function ChecklistApp() {
                       const showDate = idx === 0 || (messages[idx-1].createdAt?.toDate ? messages[idx-1].createdAt.toDate().toDateString() : '') !== date.toDateString();
 
                       return (
-                        <React.Fragment key={`${msg.id}-${idx}`}>
+                        <React.Fragment key={msg.id || `msg-temp-${idx}`}>
                           {showDate && (
                             <div className="flex justify-center my-4">
                               <span className="bg-white/80 backdrop-blur-sm px-3 py-1 rounded-lg text-[10px] font-bold text-slate-500 uppercase tracking-wider shadow-sm border border-white/50">
@@ -2778,7 +2896,7 @@ function ChecklistApp() {
                               </span>
                             </div>
                           )}
-                          <div className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}>
+                          <div className={`flex ${isMe ? 'justify-end' : 'justify-start'} group/msg`}>
                             <div className={`max-w-[85%] rounded-2xl px-4 py-2 shadow-sm relative ${isMe ? 'bg-emerald-500 text-white rounded-tr-none' : 'bg-white text-slate-800 rounded-tl-none'}`}>
                               {!isMe && (
                                 <p className="text-[10px] font-black text-emerald-600 mb-1 uppercase tracking-tighter">
@@ -2813,6 +2931,16 @@ function ChecklistApp() {
                                 <span className="text-[9px] font-medium">{timeStr}</span>
                                 {isMe && <Check size={10} />}
                               </div>
+
+                              {/* Delete Button */}
+                              {isMe && (
+                                <button 
+                                  onClick={() => setChatToDelete(msg.id)}
+                                  className="absolute -left-8 top-1/2 -translate-y-1/2 p-1.5 text-slate-400 hover:text-red-500 opacity-0 group-hover/msg:opacity-100 transition-opacity"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              )}
                             </div>
                           </div>
                         </React.Fragment>
@@ -2820,6 +2948,39 @@ function ChecklistApp() {
                     })
                   )}
                 </div>
+
+                {/* Chat Delete Confirmation */}
+                <AnimatePresence>
+                  {chatToDelete && (
+                    <div className="absolute inset-0 z-50 flex items-center justify-center p-6 bg-slate-900/20 backdrop-blur-sm">
+                      <motion.div 
+                        initial={{ scale: 0.9, opacity: 0 }}
+                        animate={{ scale: 1, opacity: 1 }}
+                        exit={{ scale: 0.9, opacity: 0 }}
+                        className="bg-white rounded-3xl p-6 shadow-2xl max-w-xs w-full text-center"
+                      >
+                        <div className="w-12 h-12 bg-red-100 text-red-600 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                          <Trash2 size={24} />
+                        </div>
+                        <h3 className="text-lg font-bold text-slate-900 mb-2">{t.confirmDeleteChat}</h3>
+                        <div className="flex gap-3">
+                          <button 
+                            onClick={() => setChatToDelete(null)}
+                            className="flex-1 py-3 rounded-xl font-bold text-slate-500 hover:bg-slate-50 transition-colors"
+                          >
+                            {t.cancel}
+                          </button>
+                          <button 
+                            onClick={() => deleteChatMessage(chatToDelete)}
+                            className="flex-1 py-3 bg-red-500 text-white rounded-xl font-bold hover:bg-red-600 transition-colors"
+                          >
+                            {t.delete}
+                          </button>
+                        </div>
+                      </motion.div>
+                    </div>
+                  )}
+                </AnimatePresence>
 
                 {/* Chat Input */}
                 <div className="bg-white p-4 border-t border-slate-100 shrink-0">
@@ -2878,6 +3039,178 @@ function ChecklistApp() {
     </div>
     )}
     </>
+  );
+}
+
+function WorkshopBackground() {
+  return (
+    <div className="absolute inset-0 overflow-hidden pointer-events-none z-0">
+      {/* Base Gradient */}
+      <div className="absolute inset-0 bg-gradient-to-br from-slate-50 via-white to-emerald-50/40" />
+      
+      {/* Floor Perspective */}
+      <div className="absolute bottom-0 left-0 w-full h-[40%] opacity-[0.05]">
+        <svg width="100%" height="100%" viewBox="0 0 1000 400" preserveAspectRatio="none">
+          <path d="M0 400 L450 0 L550 0 L1000 400" fill="none" stroke="currentColor" className="text-slate-900" strokeWidth="1" />
+          <line x1="200" y1="400" x2="470" y2="0" stroke="currentColor" className="text-slate-900" strokeWidth="0.5" />
+          <line x1="800" y1="400" x2="530" y2="0" stroke="currentColor" className="text-slate-900" strokeWidth="0.5" />
+          <line x1="0" y1="100" x2="1000" y2="100" stroke="currentColor" className="text-slate-900" strokeWidth="0.5" />
+          <line x1="0" y1="250" x2="1000" y2="250" stroke="currentColor" className="text-slate-900" strokeWidth="0.5" />
+        </svg>
+      </div>
+
+      {/* Left Shelves Silhouette */}
+      <motion.div 
+        initial={{ opacity: 0, x: -20 }}
+        animate={{ opacity: 0.1, x: 0 }}
+        transition={{ duration: 1.5 }}
+        className="absolute left-0 bottom-0 w-[25%] h-[70%] text-slate-900"
+      >
+        <svg width="100%" height="100%" viewBox="0 0 200 600" preserveAspectRatio="xMinYMax meet">
+          <rect x="20" y="50" width="10" height="550" fill="currentColor" />
+          <rect x="160" y="50" width="10" height="550" fill="currentColor" />
+          {[150, 250, 350, 450, 550].map(y => (
+            <g key={y}>
+              <rect x="20" y={y} width="150" height="8" fill="currentColor" />
+              {/* Green Ornaments on Shelves */}
+              <circle cx={40 + (y % 100)} cy={y - 10} r="4" fill="#10b981" opacity="0.8" />
+            </g>
+          ))}
+          {/* Boxes on shelves */}
+          <rect x="40" y="510" width="40" height="30" fill="currentColor" opacity="0.6" />
+          <rect x="90" y="500" width="50" height="40" fill="currentColor" opacity="0.4" />
+          <rect x="50" y="410" width="80" height="30" fill="currentColor" opacity="0.5" />
+        </svg>
+      </motion.div>
+
+      {/* Right Workbench Silhouette */}
+      <motion.div 
+        initial={{ opacity: 0, x: 20 }}
+        animate={{ opacity: 0.08, x: 0 }}
+        transition={{ duration: 1.5, delay: 0.2 }}
+        className="absolute right-0 bottom-0 w-[30%] h-[60%] text-slate-900"
+      >
+        <svg width="100%" height="100%" viewBox="0 0 300 500" preserveAspectRatio="xMaxYMax meet">
+          <rect x="0" y="300" width="280" height="15" fill="currentColor" />
+          <rect x="20" y="315" width="10" height="185" fill="currentColor" />
+          <rect x="250" y="315" width="10" height="185" fill="currentColor" />
+          {/* Hanging tools */}
+          <rect x="50" y="100" width="4" height="60" fill="currentColor" opacity="0.5" />
+          <circle cx="52" cy="170" r="8" fill="currentColor" opacity="0.5" />
+          <rect x="100" y="80" width="6" height="80" fill="currentColor" opacity="0.4" />
+          <rect x="150" y="120" width="5" height="40" fill="currentColor" opacity="0.6" />
+          {/* Green Ornaments on Workbench */}
+          <circle cx="60" cy="285" r="5" fill="#10b981" opacity="0.6" />
+          <circle cx="220" cy="285" r="5" fill="#10b981" opacity="0.6" />
+        </svg>
+      </motion.div>
+
+      {/* Person Checking Checklist Silhouette */}
+      <motion.div
+        animate={{ 
+          opacity: [0.04, 0.06, 0.04],
+          x: [0, 3, 0],
+          y: [0, -1, 0]
+        }}
+        transition={{ duration: 6, repeat: Infinity, ease: "easeInOut" }}
+        className="absolute bottom-[15%] left-[40%] w-32 h-64 text-emerald-900"
+      >
+        <svg viewBox="0 0 100 200" fill="currentColor">
+          {/* Head */}
+          <circle cx="50" cy="30" r="14" />
+          {/* Body */}
+          <path d="M35 50 Q50 45 65 50 L70 120 L60 120 L55 185 L45 185 L40 120 L30 120 Z" />
+          
+          {/* Left Arm holding Clipboard */}
+          <path d="M35 60 L20 90 L30 100" stroke="currentColor" strokeWidth="8" strokeLinecap="round" fill="none" />
+          {/* Clipboard */}
+          <rect x="10" y="95" width="25" height="35" rx="2" fill="currentColor" opacity="0.8" />
+          <rect x="18" y="92" width="10" height="5" rx="1" fill="currentColor" />
+          
+          {/* Right Arm Checking (Animated) */}
+          <motion.g
+            animate={{ rotate: [0, -10, 0], x: [0, 2, 0] }}
+            transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+          >
+            <path d="M65 60 L85 85" stroke="currentColor" strokeWidth="8" strokeLinecap="round" fill="none" />
+            {/* Pen/Hand */}
+            <path d="M85 85 L80 95" stroke="currentColor" strokeWidth="4" strokeLinecap="round" fill="none" />
+            {/* Green Checkmark Effect */}
+            <motion.path 
+              d="M82 100 L85 105 L92 95" 
+              stroke="#10b981" 
+              strokeWidth="3" 
+              strokeLinecap="round" 
+              strokeLinejoin="round" 
+              fill="none"
+              animate={{ opacity: [0, 1, 0], scale: [0.8, 1.2, 0.8] }}
+              transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+            />
+          </motion.g>
+        </svg>
+      </motion.div>
+
+      {/* Floating Green Particles (Ornaments) */}
+      <div className="absolute inset-0">
+        {[...Array(15)].map((_, i) => (
+          <motion.div
+            key={i}
+            className="absolute w-1 h-1 bg-emerald-400 rounded-full"
+            style={{ 
+              left: `${Math.random() * 100}%`, 
+              top: `${Math.random() * 100}%` 
+            }}
+            animate={{ 
+              y: [0, -40, 0],
+              opacity: [0, 0.4, 0],
+              scale: [0.5, 1, 0.5]
+            }}
+            transition={{ 
+              duration: 5 + Math.random() * 5, 
+              repeat: Infinity, 
+              delay: Math.random() * 5,
+              ease: "linear"
+            }}
+          />
+        ))}
+      </div>
+
+      {/* Subtle Light Beams */}
+      <div className="absolute inset-0">
+        <motion.div 
+          animate={{ opacity: [0.1, 0.2, 0.1], x: [-20, 20, -20] }}
+          transition={{ duration: 10, repeat: Infinity, ease: "easeInOut" }}
+          className="absolute top-0 left-1/4 w-32 h-full bg-gradient-to-b from-emerald-200/20 to-transparent rotate-12 blur-3xl" 
+        />
+        <motion.div 
+          animate={{ opacity: [0.05, 0.15, 0.05], x: [20, -20, 20] }}
+          transition={{ duration: 12, repeat: Infinity, ease: "easeInOut", delay: 1 }}
+          className="absolute top-0 right-1/3 w-48 h-full bg-gradient-to-b from-blue-200/10 to-transparent -rotate-12 blur-3xl" 
+        />
+      </div>
+    </div>
+  );
+}
+
+function CleanBackground() {
+  return (
+    <div className="absolute inset-0 overflow-hidden pointer-events-none z-0">
+      <div className="absolute inset-0 bg-[radial-gradient(#e2e8f0_1px,transparent_1px)] [background-size:32px_32px] opacity-30" />
+      <div className="absolute inset-0 bg-gradient-to-br from-emerald-50/50 via-white to-slate-50/50" />
+      
+      <div className="absolute top-0 left-0 w-full h-full">
+        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-emerald-100/30 rounded-full blur-[120px]" />
+        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-blue-100/20 rounded-full blur-[120px]" />
+      </div>
+
+      <div className="absolute inset-0 flex items-center justify-center opacity-[0.03]">
+        <div className="w-full max-w-4xl grid grid-cols-3 gap-8 p-12">
+          {[...Array(9)].map((_, i) => (
+            <div key={i} className="aspect-square border-2 border-slate-900 rounded-3xl" />
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -3040,7 +3373,7 @@ function DiscussionBackground() {
       {/* Floating Decorative Elements */}
       {[1, 2, 3, 4].map((i) => (
         <motion.div
-          key={`circle-${i}`}
+          key={`bg-circle-${i}`}
           animate={{ 
             y: [-40, 40, -40],
             x: [-30, 30, -30],

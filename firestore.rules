@@ -71,7 +71,7 @@ service cloud.firestore {
           // Cannot downgrade owner (owner has their own rule)
           resource.data.get('members', {})[request.auth.uid] != 'owner' &&
           // Only allowed to touch these top-level fields
-          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members', 'nicknames', 'lastReadAt', 'updatedAt']) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members', 'nicknames', 'lastReadAt', 'memberJoinedAt', 'updatedAt']) &&
           // Ensure they only touch their own keys in the maps
           (
             !request.resource.data.diff(resource.data).affectedKeys().hasAny(['members']) ||
@@ -84,6 +84,10 @@ service cloud.firestore {
           (
             !request.resource.data.diff(resource.data).affectedKeys().hasAny(['lastReadAt']) ||
             request.resource.data.get('lastReadAt', {}).diff(resource.data.get('lastReadAt', {})).affectedKeys().hasOnly([request.auth.uid])
+          ) &&
+          (
+            !request.resource.data.diff(resource.data).affectedKeys().hasAny(['memberJoinedAt']) ||
+            request.resource.data.get('memberJoinedAt', {}).diff(resource.data.get('memberJoinedAt', {})).affectedKeys().hasOnly([request.auth.uid])
           )
         )
       );
@@ -103,6 +107,12 @@ service cloud.firestore {
       allow create: if isAuthenticated() && isEventMember(request.resource.data.eventId);
       allow update: if isAuthenticated() && isEventMember(resource.data.eventId);
       allow delete: if isAuthenticated() && isEventMember(resource.data.eventId);
+    }
+
+    match /ai_usage/{userId} {
+      allow read: if isAuthenticated() && request.auth.uid == userId;
+      allow create: if isAuthenticated() && request.auth.uid == userId;
+      allow update: if isAuthenticated() && request.auth.uid == userId;
     }
 
     match /{path=**} {
