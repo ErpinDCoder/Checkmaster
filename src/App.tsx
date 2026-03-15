@@ -632,18 +632,18 @@ function ChecklistApp() {
     }
   }, [messages, showChat, user, currentEventId, currentEvent]);
 
+  // FIX: Menggunakan pesan sebagai trigger, currentEvent dihapus agar tidak loop
   useEffect(() => {
-    if (showChat && currentEventId && user && appMode !== 'offline' && currentEvent) {
+    if (showChat && currentEventId && user && appMode !== 'offline') {
       updateDoc(doc(db, 'events', currentEventId), {
         [`lastReadAt.${user.uid}`]: serverTimestamp()
-      }).catch(err => {
-        // Only log if it's not a permission error during transition
+      }).catch((err: any) => {
         if (!err.message?.includes('permission')) {
           console.error('Error updating lastReadAt:', err);
         }
       });
     }
-  }, [showChat, currentEventId, user, appMode, currentEvent]);
+  }, [showChat, currentEventId, user, appMode, messages.length]); 
 
   useEffect(() => {
     localStorage.setItem('custom-categories', JSON.stringify(customCategories));
@@ -678,8 +678,9 @@ function ChecklistApp() {
     }
   }, [isAuthReady, user, appMode]);
 
+  // FIX: currentEvent dihapus dari trigger fetch pesan agar tidak loop
   useEffect(() => {
-    if (!currentEventId || appMode === 'offline' || !currentEvent) {
+    if (!currentEventId || appMode === 'offline') {
       setMessages([]);
       return;
     }
@@ -696,12 +697,10 @@ function ChecklistApp() {
         msgs.push({ id: doc.id, ...doc.data() } as ChatMessage);
       });
       setMessages(msgs);
-    }, (error) => {
-      // Only handle as fatal if we are sure we should have access
-      if (user && currentEvent) {
-        // If it's a permission error, maybe just log it instead of throwing
+    }, (error: any) => {
+      if (user) {
         if (error.message?.includes('permission')) {
-          console.warn('Firestore permission denied for messages (likely transition):', error);
+          console.warn('Firestore permission denied for messages:', error);
         } else {
           handleFirestoreError(error, OperationType.LIST, 'messages');
         }
@@ -709,7 +708,7 @@ function ChecklistApp() {
     });
 
     return () => unsubscribe();
-  }, [currentEventId, appMode, user, currentEvent]);
+  }, [currentEventId, appMode, user]);
 
   // Auth Listener
   useEffect(() => {
