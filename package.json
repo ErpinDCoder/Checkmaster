@@ -4,13 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-<<<<<<< HEAD
     "dev": "vite --port=3000 --host=0.0.0.0",
     "build": "vite build --base=/Checkmaster/",
-=======
-    "dev": "tsx server.ts",
-    "build": "vite build",
->>>>>>> 8717aa79f5373a5c187fd250fe1277276cea68b0
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
