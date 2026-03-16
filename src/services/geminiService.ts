@@ -7,7 +7,7 @@ const ai = new GoogleGenAI({ apiKey: apiKey });
 export async function generateEventChecklist(eventType: string, eventDescription: string, lang: 'id' | 'en' = 'id') {
   if (!apiKey) {
     console.error("API Key Gemini tidak ditemukan!");
-    return { tasks: [] }; 
+    return []; // UI butuh balasan Array kosong kalau gagal
   }
 
   const prompt = lang === 'id' 
@@ -20,29 +20,25 @@ export async function generateEventChecklist(eventType: string, eventDescription
       contents: prompt,
       config: {
         responseMimeType: "application/json",
+        // Kembalikan ke format murni ARRAY sesuai struktur awalmu
         responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            tasks: { // <-- Ini kunci utamanya, kita bungkus dalam "tasks"
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  category: { type: Type.STRING },
-                  task: { type: Type.STRING }
-                }
-              }
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              category: { type: Type.STRING },
+              task: { type: Type.STRING }
             }
           }
         }
       }
     });
 
-    // Mengembalikan data JSON yang sudah sesuai harapan UI
-    return JSON.parse(response.text || '{"tasks": []}');
+    // Mengembalikan langsung Array-nya
+    return JSON.parse(response.text || "[]");
 
   } catch (e) {
     console.error("Gagal mengambil saran AI:", e);
-    return { tasks: [] };
+    return []; // Kalau error, kembalikan Array kosong biar UI gak pecah
   }
 }
