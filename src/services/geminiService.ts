@@ -18,7 +18,7 @@ export async function generateEventChecklist(eventType: string, eventDescription
 
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-1.5-flash",
+      model: "gemini-2.5-flash",
       contents: prompt,
       config: {
         // Memaksa Gemini untuk selalu membalas dalam format JSON agar tidak error saat dibaca aplikasi
