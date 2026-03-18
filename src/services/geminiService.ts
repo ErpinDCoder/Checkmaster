@@ -1,46 +1,21 @@
-import { GoogleGenAI, Type } from "@google/genai";
-
-const base64Key = (import.meta as any).env.VITE_GEMINI_API_KEY_BASE64;
-const apiKey = base64Key ? atob(base64Key) : "";
-const ai = new GoogleGenAI({ apiKey: apiKey });
 
 export async function generateEventChecklist(eventType: string, eventDescription: string, lang: 'id' | 'en' = 'id') {
-  if (!apiKey) {
-    console.error("API Key Gemini tidak ditemukan!");
-    return []; 
-  }
-
-  const prompt = lang === 'id' 
-    ? `Buatkan checklist lengkap untuk acara ${eventType}. Deskripsi: ${eventDescription}. Kelompokkan tugas ke dalam kategori yang logis.`
-    : `Generate a comprehensive checklist for a ${eventType} event. Description: ${eventDescription}. Group tasks into logical categories.`;
-
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        // SKEMA FINAL: Menyesuaikan persis dengan for...of di App.tsx
-        responseSchema: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              category: { type: Type.STRING },
-              tasks: { 
-                type: Type.ARRAY,
-                items: { type: Type.STRING } // Array berisi teks tugas
-              }
-            }
-          }
-        }
-      }
+    const response = await fetch("/api/ai-suggest", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ eventType, eventDescription, lang }),
     });
 
-    return JSON.parse(response.text || "[]");
+    if (!response.ok) {
+      throw new Error("Gagal mengambil saran dari server");
+    }
 
+    return await response.json();
   } catch (e) {
-    console.error("Gagal mengambil saran AI:", e);
+    console.error("Gagal mengambil saran AI", e);
     return [];
   }
 }
