@@ -32,6 +32,7 @@ Anda tidak perlu menginstal apa pun untuk mencoba Checkmaster! Rasakan langsung 
 
 🧠 **Di Balik Layar (AI Studio):** Ingin melihat bagaimana logika AI dan *prompt* disusun? Kunjungi ruang kerja saya di Google AI Studio di sini: [Proyek Checkmaster di AI Studio](https://ai.studio/apps/09530177-bc1e-4ca0-9b3c-660ed7a8c883)
 
+****GUNAKAN AKUN GMAIL DUMMY JIKA INGIN MENCOBA LOGIN !**
 ## 🧠 Tantangan & Proses Engineering
 
 Membangun Checkmaster melibatkan pemecahan beberapa tantangan teknis yang menarik:
