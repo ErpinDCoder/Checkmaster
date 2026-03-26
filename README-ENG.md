@@ -32,7 +32,7 @@ You don't need to install anything to try Checkmaster! Experience the app direct
 
 🧠 **Behind the Scenes (AI Studio):** Want to see how the AI logic and prompts are structured? Check out my workspace in Google AI Studio here: [Checkmaster AI Studio Project](https://ai.studio/apps/09530177-bc1e-4ca0-9b3c-660ed7a8c883)
 
-****USE DUMMMY GMAIL ACCOUNT IF YOU WANT TO TRY TO LOGIN !**
+****USE DUMMY GMAIL ACCOUNT IF YOU WANT TO TRY TO LOGIN !**
 
 ## 🧠 Engineering Journey & Challenges Overcome
 
